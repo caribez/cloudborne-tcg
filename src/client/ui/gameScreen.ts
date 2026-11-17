@@ -82,7 +82,7 @@ export class GameScreen {
         <div class="hint"></div>
         <div class="buttons">
           <button class="btn draw" type="button" title="Draw the top card (D)">Draw card</button>
-          <button class="btn primary end" type="button">End turn</button>
+          <button class="btn primary end-turn" type="button">End turn</button>
         </div>
         <div class="selection" hidden></div>
         <div class="keys">Click a hand card, then the table to play it · Q/E rotate · Esc cancel · scroll to zoom</div>
@@ -101,7 +101,7 @@ export class GameScreen {
       status: q('.turn-status'),
       hint: q('.hint'),
       draw: q('.draw'),
-      end: q('.end'),
+      end: q('.end-turn'),
       selection: q('.selection'),
       toast: q('.toast'),
       deckLabel: q('.deck-label'),

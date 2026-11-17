@@ -50,7 +50,7 @@ check((await page.textContent('.log ol')).match(/Ada drew a card/g)?.length === 
 console.log('Handoff privacy');
 await clickHandCard(page, 1); // a lingering selection + inspector preview
 check(await page.isVisible('.inspector'), 'inspector open before ending the turn');
-await page.click('.end');
+await page.click('.end-turn');
 info = await screenInfo(page);
 check((await page.textContent('.privacy h1')) === 'Pass to Bo', 'End turn shows "Pass to Bo" immediately');
 check(info.hand.length === 0 && info.tweens === 0, 'outgoing hand removed and animations stopped at handoff');

@@ -440,24 +440,31 @@ export class TableScene {
     return { x: startX + spacing * index, y: m.baseY, z: index * 2, scale: m.scale, m };
   }
 
+  /** Target placement of a hand card (pixels in the hand layer), including hover/selection lift. */
+  private handTarget(id: string, index: number, count: number) {
+    const slot = this.handSlot(index, count);
+    let y = slot.y;
+    let scale = slot.scale;
+    let z = slot.z;
+    if (id === this.selected) {
+      y += slot.m.cardH * 0.22;
+      z += 200;
+    } else if (id === this.hoverHand && this.inputEnabled) {
+      y += slot.m.cardH * 0.12;
+      scale *= 1.06;
+      z += 100;
+    }
+    return { x: slot.x, y, z, scale };
+  }
+
   private layoutHand(animate: boolean): void {
     const n = this.handOrder.length;
     this.handOrder.forEach((id, i) => {
       const obj = this.handCards.get(id);
       if (!obj) return;
-      const slot = this.handSlot(i, n);
-      let y = slot.y;
-      let scale = slot.scale;
-      let z = slot.z;
-      if (id === this.selected) {
-        y += slot.m.cardH * 0.22;
-        z += 200;
-      } else if (id === this.hoverHand && this.inputEnabled) {
-        y += slot.m.cardH * 0.12;
-        scale *= 1.06;
-        z += 100;
-      }
-      const target = new THREE.Vector3(slot.x, y, z);
+      const t = this.handTarget(id, i, n);
+      const scale = t.scale;
+      const target = new THREE.Vector3(t.x, t.y, t.z);
       if (obj.mesh.userData.fresh && animate) {
         obj.mesh.userData.fresh = false;
         const deckPx = this.worldToHand(new THREE.Vector3(DECK_POS.x, this.deck.position.y * 2, DECK_POS.z));
@@ -588,16 +595,19 @@ export class TableScene {
     return new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
   }
 
+  /** Hit-tests hand cards against their layout rectangles, not their (possibly animating) meshes. */
   private pickHand(ndc: THREE.Vector2): string | null {
-    this.raycaster.setFromCamera(ndc, this.handCamera);
-    const meshes = [...this.handCards.values()].map((o) => o.mesh);
-    const hits = this.raycaster.intersectObjects(meshes, false);
+    const px = (ndc.x * this.width) / 2;
+    const py = (ndc.y * this.height) / 2;
+    const n = this.handOrder.length;
     let best: { id: string; z: number } | null = null;
-    for (const hit of hits) {
-      const id = [...this.handCards].find(([, o]) => o.mesh === hit.object)?.[0];
-      if (id && (!best || hit.object.position.z > best.z)) best = { id, z: hit.object.position.z };
-    }
-    return best?.id ?? null;
+    this.handOrder.forEach((id, i) => {
+      const t = this.handTarget(id, i, n);
+      const hw = (CARD_SIZE.width * t.scale) / 2;
+      const hh = (CARD_SIZE.height * t.scale) / 2;
+      if (Math.abs(px - t.x) <= hw && Math.abs(py - t.y) <= hh && (!best || t.z > best.z)) best = { id, z: t.z };
+    });
+    return (best as { id: string } | null)?.id ?? null;
   }
 
   private pickTable(ndc: THREE.Vector2): { info: TablePointer; deck: boolean } {

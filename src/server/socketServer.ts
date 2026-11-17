@@ -26,6 +26,9 @@ export interface LanServer {
 export function attachLanServer(httpServer: HttpServer, options: Omit<AuthorityOptions, 'onChange'> = {}): LanServer {
   const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
     maxHttpBufferSize: 16 * 1024,
+    // Notice dropped connections within ~10 s (defaults allow ~45 s) so the game pauses promptly.
+    pingInterval: 5000,
+    pingTimeout: 5000,
     // Same-origin in dev (Vite proxy) and production; no CORS needed.
     serveClient: false,
   });
