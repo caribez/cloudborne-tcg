@@ -25,8 +25,6 @@ const httpServer = createServer(
     : createStaticHandler(clientDir),
 );
 
-attachLanServer(httpServer, { log: (m) => console.log(`[lobby] ${m}`) });
-
 function lanAddresses(): string[] {
   const out: string[] = [];
   for (const list of Object.values(networkInterfaces())) {
@@ -34,6 +32,13 @@ function lanAddresses(): string[] {
   }
   return out;
 }
+
+// In development, players open the Vite dev server (5173), which proxies Socket.IO here.
+const publicPort = isDev ? Number(process.env.VITE_PORT ?? 5173) : port;
+attachLanServer(httpServer, {
+  log: (m) => console.log(`[lobby] ${m}`),
+  shareUrls: lanAddresses().map((ip) => `http://${ip}:${publicPort}/`),
+});
 
 httpServer.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE') console.error(`Port ${port} is already in use. Set PORT=<number> to choose another.`);

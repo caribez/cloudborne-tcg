@@ -165,10 +165,11 @@ describe('turn actions', () => {
 
 describe('placement helper', () => {
   it('snaps rotation and keeps rotated cards inside', () => {
-    const p = resolvePlacement({ x: 50, y: 30, rotation: 97 });
+    const p = resolvePlacement({ x: TABLE_BOUNDS.maxX, y: TABLE_BOUNDS.maxY, rotation: 97 });
     expect(p.rotation).toBe(90);
-    expect(p.x).toBeLessThanOrEqual(50 - 8.8 / 2 + 1e-9);
-    expect(p.y).toBeLessThanOrEqual(30 - 6.3 / 2 + 1e-9);
+    // Rotated 90°, the card's long side runs along x.
+    expect(p.x).toBeCloseTo(TABLE_BOUNDS.maxX - 8.8 / 2, 1);
+    expect(p.y).toBeCloseTo(TABLE_BOUNDS.maxY - 6.3 / 2, 1);
     expect(resolvePlacement({ x: 0, y: 0, rotation: -15 }).rotation).toBe(345);
   });
 });

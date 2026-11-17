@@ -42,6 +42,8 @@ export interface AuthorityOptions {
   /** Called after any change that may alter someone's snapshot. */
   readonly onChange?: () => void;
   readonly log?: (message: string) => void;
+  /** LAN URLs shown in the lobby so the host can tell others where to connect. */
+  readonly shareUrls?: readonly string[];
 }
 
 const RECENT_LIMIT = 200;
@@ -58,12 +60,14 @@ export class LanAuthority {
   private readonly lobbyGraceMs: number;
   private readonly onChange: () => void;
   private readonly log: (m: string) => void;
+  private readonly shareUrls: readonly string[];
 
   constructor(options: AuthorityOptions = {}) {
     this.rngFactory = options.rngFactory ?? defaultRng;
     this.lobbyGraceMs = options.lobbyGraceMs ?? 60_000;
     this.onChange = options.onChange ?? (() => {});
     this.log = options.log ?? (() => {});
+    this.shareUrls = options.shareUrls ?? [];
   }
 
   get phase(): 'lobby' | 'playing' {
@@ -281,7 +285,7 @@ export class LanAuthority {
       return { playerId: s.playerId, name: s.name, connected: s.connected, isHost: t === this.hostToken };
     });
     return {
-      lobby: { phase: this.phase, seats, minPlayers: PROVISIONAL_RULES.minPlayers },
+      lobby: { phase: this.phase, seats, minPlayers: PROVISIONAL_RULES.minPlayers, shareUrls: this.shareUrls },
       game: this.game ? playerView(this.game, me.seat) : null,
       you: { playerId: me.playerId, seat: me.seat, isHost: token === this.hostToken },
       waitingFor: this.waitingFor(),

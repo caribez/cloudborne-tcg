@@ -22,6 +22,8 @@ export interface LobbyView {
   /** Fixed-length list; null means the seat is free. During play, seat index = game seat. */
   readonly seats: readonly (LobbySeat | null)[];
   readonly minPlayers: number;
+  /** URLs other devices can open to join (LAN addresses of the host). */
+  readonly shareUrls: readonly string[];
 }
 
 export interface ServerSnapshot {

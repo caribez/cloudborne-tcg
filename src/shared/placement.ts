@@ -10,7 +10,7 @@
  * touching rules, networking or rendering.
  */
 
-export const TABLE_BOUNDS = { minX: -50, maxX: 50, minY: -30, maxY: 30 } as const;
+export const TABLE_BOUNDS = { minX: -36, maxX: 36, minY: -22, maxY: 22 } as const;
 
 export const CARD_SIZE = { width: 6.3, height: 8.8 } as const;
 

@@ -21,5 +21,6 @@ export default defineConfig({
     outDir: 'dist/client',
     emptyOutDir: true,
     target: 'es2022',
+    chunkSizeWarningLimit: 1000, // three.js alone is ~600 kB minified
   },
 });
