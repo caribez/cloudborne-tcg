@@ -1,0 +1,32 @@
+{
+  "name": "cloudborne-tcg",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser card-game prototype for 2-4 players: hotseat and LAN.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c blue,green \"tsx watch src/server/main.ts\" \"vite\"",
+    "build": "vite build && vite build --ssr src/server/main.ts --outDir dist/server",
+    "start": "node dist/server/main.js",
+    "typecheck": "tsc -p tsconfig.client.json && tsc -p tsconfig.server.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "socket.io": "^4.8.4",
+    "socket.io-client": "^4.8.4",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/three": "^0.187.0",
+    "concurrently": "^10.0.7",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}
