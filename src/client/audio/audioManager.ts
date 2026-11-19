@@ -28,18 +28,18 @@ private readonly turnStartSound = new Audio(turnStart);
   constructor() {
     for (const sound of this.cardSounds) {
       sound.preload = 'auto';
-      sound.volume = 0.65;
+      sound.volume = 0.35;
     }
     for (const sound of this.cardSelectSounds) {
       sound.preload = 'auto';
-      sound.volume = 0.65;
+      sound.volume = 0.7;
     }
     this.turnStartSound.preload = 'auto';
     this.turnStartSound.volume = 0.6;
 
     this.music.preload = 'auto';
     this.music.loop = true;
-    this.music.volume = 0.25;
+    this.music.volume = 0.125;
   }
 
   playCard(): void {

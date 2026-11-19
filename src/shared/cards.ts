@@ -98,7 +98,12 @@ export const CHARACTERS: readonly CharacterDefinition[] = [
   character({ id: 'city-administrator', name: 'City Administrator', cost: 2, affiliation: 'aristocracy', tags: ['noble'], onRecruit: { aristocracy: 1, religion: 1 }, recurring: { gold: 0, cards: 1 }, marriage: [{ aristocracy: 1 }, { religion: 1 }] }),
   character({ id: 'gardener', name: 'Gardener', cost: 2, affiliation: 'religion', tags: [], onRecruit: { religion: 1, popularity: 1 }, recurring: none, marriage: null }),
   character({ id: 'honor-guards', name: 'Honor Guards', cost: 2, affiliation: 'popularity', tags: ['military'], onRecruit: { popularity: 1, aristocracy: 1 }, recurring: none, marriage: null }),
-
+  character({ id: 'sivashir-slaves', name: 'Sivashir Slaves', cost: 1, affiliation: 'aristocracy', tags: [], onRecruit: { aristocracy: 1 }, recurring: none, marriage: null }),
+  character({ id: 'lorekeeper', name: 'Lorekeeper', cost: 1, affiliation: 'religion', tags: [], onRecruit: { religion: 1 }, recurring: none, marriage: null }),
+  character({ id: 'street-performer', name: 'Street Performer', cost: 1, affiliation: 'popularity', tags: [], onRecruit: { popularity: 1 }, recurring: none, marriage: null }),
+  character({ id: 'palatin', name: 'Palatin', cost: 3, affiliation: 'aristocracy', tags: ['noble'], onRecruit: { aristocracy: 2 }, recurring: none, marriage: null }),
+  character({ id: 'seer', name: 'Seer', cost: 2, affiliation: 'popularity', tags: [], onRecruit: { popularity: 1, religion: 1 }, recurring: none, marriage: null }),
+  character({ id: 'daelon-the-monk', name: 'Daelon the Monk', cost: 2, affiliation: 'popularity', tags: [], onRecruit: { popularity: 1, religion: 1 }, recurring: none, marriage: [{ religion: 2 }] }),
 ];
 
 export const SCHEMES: readonly SchemeDefinition[] = [
@@ -110,6 +115,12 @@ export const SCHEMES: readonly SchemeDefinition[] = [
   scheme({ id: 'scandal-party', name: 'Scandal Party', cost: 1, targetsOpponent: true, success: { target: { aristocracy: -2 } }, revealed: { owner: { aristocracy: -2 } } }),
   scheme({ id: 'inquisitor', name: 'Inquisitor', cost: 1, targetsOpponent: true, success: { target: { religion: -2 } }, revealed: { owner: { religion: -1, aristocracy: -1 } }, flavor: 'You know what to do.' }),
   scheme({ id: 'phalannean-artifact', name: 'Phalannean Artifact', cost: 2, targetsOpponent: false, success: { owner: { religion: 2, aristocracy: 1 } }, revealed: { owner: { religion: -1, popularity: -2 } }, flavor: 'Have you heard? They found the Tomb of Feion on Mount Celes.' }),
+  scheme({ id: 'propaganda', name: 'Propaganda', cost: 1, targetsOpponent: false, success: { owner: { popularity: 1 } }, revealed: { owner: { popularity: -1 } }, flavor: 'The generous, the merciful, the just. The Leader.' }),
+  scheme({ id: 'prophet-of-aiel', name: 'Prophet of Aiel', cost: 1, targetsOpponent: false, success: { owner: { religion: 1 } }, revealed: { owner: { religion: -1 } }, flavor: 'Like a melody, his words rang through the crowded streets.' }),
+  scheme({ id: 'pilgrimage', name: 'Pilgrimage', cost: 2, targetsOpponent: false, success: { owner: { religion: 1, popularity: 2 } }, revealed: { owner: { religion: -1, popularity: -1 } }, flavor: 'What I saw at Mount Celes was astonishing. I now feel as if born anew. Pray with me!' }),
+  scheme({ id: 'bathing-house', name: 'Bathing House', cost: 2, targetsOpponent: false, success: { owner: { aristocracy: 1, popularity: 2 } }, revealed: { owner: { aristocracy: -1, popularity: -1 } }, flavor: 'Nothing’s quite like a hot bath after a senate meeting.' }),
+  scheme({ id: 'blessed-marriage', name: 'Blessed Marriage', cost: 2, targetsOpponent: false, success: { owner: { aristocracy: 2, religion: 1 } }, revealed: { owner: { aristocracy: -1, religion: -2 } }, flavor: 'The Cloud mother gave you her blessing, marry anyone you like.' }),
+  scheme({ id: 'new-monastery', name: 'New Monastery', cost: 2, targetsOpponent: false, success: { owner: { religion: 2, popularity: 1 } }, revealed: { owner: { religion: -2 } } }),
   // PROVISIONAL experimental trap card (not a historical design).
   scheme({
     id: 'planted-scandal',
