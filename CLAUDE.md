@@ -7,6 +7,11 @@ The rules are being workshopped. Optimize for quick rule changes, readable inter
 
 ## Scope and references
 - Foundation brief: `docs/prototype-brief.md`. Design concept (long-term vs. demo): `docs/political-game-design.md`.
+- Historical card catalog: `docs/card-catalog.md` is the primary reference for historical card designs, alternative versions, flavor texts, planned distributions, and future card expansions.
+- Keep historical designs, provisional demo rules (`PROTOTYPE_RULES.md`), and actual implemented behavior (`src/shared/` and tests) clearly separated. The historical catalog is not an implementation specification or an approved balance pass.
+- Consult the catalog before designing, modifying, or introducing cards. Preserve historical variants and source distinctions; do not silently merge versions, invent missing effects, or resolve open design questions without approval.
+- Do not implement or activate additional historical cards unless explicitly requested. Document selected historical versions and any provisional deviations. Note that adding definitions to the current card arrays automatically adds copies to the demo deck.
+- If historical designs, documented demo rules, and implemented behavior disagree, identify the discrepancy rather than silently changing gameplay.
 - Keep the exact current rules and explicitly provisional assumptions in `PROTOTYPE_RULES.md`.
 - When the user changes a rule, update that document and affected behavior/tests together. Later approved decisions supersede earlier provisional rules.
 - Do not invent scoring, victory conditions, card effects, or balancing unless requested. Mark demo-only decisions as provisional.
