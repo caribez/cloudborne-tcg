@@ -499,15 +499,33 @@ export class TableScene {
     };
   }
 
-  private handMetrics() {
-    const cardH = Math.max(110, Math.min(220, this.height * 0.2));
-    const scale = cardH / CARD_SIZE.height;
-    const cardW = CARD_SIZE.width * scale;
-    const left = -this.width / 2 + this.handLeftInset;
-    const right = this.width / 2 - Math.min(330, this.width * 0.3);
-    const baseY = -this.height / 2 + cardH / 2 + 14;
-    return { cardH, cardW, scale, left, right, baseY };
-  }
+
+private handMetrics() {
+  const compact = this.width <= 900;
+  const narrow = this.width <= 600;
+
+  const cardH = Math.max(
+    110,
+    Math.min(
+      compact ? 220 : 280,
+      this.height * (compact ? 0.2 : 0.23)
+    )
+  );
+
+  const scale = cardH / CARD_SIZE.height;
+  const cardW = CARD_SIZE.width * scale;
+
+  const rightInset = narrow
+    ? 24
+    : Math.max(240, Math.min(420, this.width * 0.3)) + 24;
+
+  const left = -this.width / 2 + this.handLeftInset;
+  const right = this.width / 2 - rightInset;
+  const baseY = -this.height / 2 + cardH / 2 + 14;
+
+  return { cardH, cardW, scale, left, right, baseY };
+}
+
 
   private handSlot(index: number, count: number) {
     const m = this.handMetrics();

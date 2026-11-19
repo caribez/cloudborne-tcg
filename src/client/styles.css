@@ -132,21 +132,39 @@ code { font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; 
 .log li.k-marriage { color: #ffe08a; }
 
 /* inspector: top-right */
-.inspector { position: absolute; right: 12px; top: 62px; z-index: 6; width: min(300px, 28vw); max-height: calc(100% - 74px); overflow: auto;
+.inspector { position: absolute; right: 12px; top: 62px; z-index: 6; width: min(420px, 36vw); max-height: calc(100% - 74px); overflow: auto;
   background: #0d0f13f2; border: 1px solid #ffffff1e; border-radius: 12px; padding: 12px; display: grid; gap: 8px; box-shadow: 0 10px 40px #0009; }
-.inspector .card-image { width: 100%; max-width: 180px; justify-self: center; border-radius: 10px; display: block; box-shadow: 0 4px 18px #0008; }
-.inspector h3 { margin: 0; font-size: 17px; }
-.inspector .sub { color: var(--card, var(--muted)); font-weight: 650; filter: brightness(1.45); font-size: 12.5px; }
-.inspector p { margin: 6px 0; color: #d4d7dd; font-size: 13px; }
+.inspector .card-image { width: 100%; max-width: 240px; justify-self: center; border-radius: 10px; display: block; box-shadow: 0 4px 18px #0008; }
+.inspector h3 {
+  margin: 0;
+  font-size: 22px;
+}
+.inspector .sub {
+  color: var(--card, var(--muted));
+  font-weight: 650;
+  filter: brightness(1.45);
+  font-size: 15px;
+}
+.inspector p {
+  margin: 8px 0;
+  color: #d4d7dd;
+  font-size: 16px;
+  line-height: 1.5;
+}
 .inspector .flavor { font-style: italic; color: var(--muted); }
 .inspector .where { color: var(--muted); font-size: 12.5px; }
 .inspector .ok { color: var(--ok); }
 .alert { color: var(--bad); font-weight: 650; }
-.rule { font-size: 13px; margin: 2px 0; color: #dfe2e8; }
+.rule {
+  font-size: clamp(16px, 1vw, 20px);
+  line-height: 1.5;
+  margin: 6px 0;
+  color: #e8e6e1;
+}
 .rule b { color: #fff; }
 
 /* action bar: bottom-right */
-.actionbar { position: absolute; right: 12px; bottom: 12px; z-index: 4; width: min(320px, 30vw); min-width: 240px; max-height: calc(100% - 80px); overflow: auto; display: grid; gap: 8px;
+.actionbar { position: absolute; right: 12px; bottom: 12px; z-index: 4; width: min(420px, 30vw); min-width: 240px; max-height: calc(100% - 80px); overflow: auto; display: grid; gap: 8px;
   background: #0d0f13f2; border: 1px solid #ffffff1e; border-radius: 12px; padding: 12px; }
 .turn-status { font-size: 13.5px; }
 .turn-status b { color: #f2c94c; }
@@ -159,9 +177,14 @@ code { font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; 
 .decision .responses { display: grid; gap: 6px; }
 .selection { border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 6px; font-size: 13px; }
 .sel-head { display: flex; align-items: baseline; gap: 8px; border-left: 4px solid var(--card); padding-left: 8px; }
-.sel-head strong { font-size: 15px; }
+.sel-head strong {
+  font-size: 20px;
+}
 .sel-head .cost { margin-left: auto; color: #f2c94c; font-weight: 700; white-space: nowrap; }
-.sel-type { color: var(--muted); font-size: 12px; }
+.sel-type {
+  color: var(--muted);
+  font-size: 15px;
+}
 .why { color: #ffb4b4; font-size: 12.5px; }
 .prompt { color: #b9f5c8; font-size: 12.5px; }
 .targets { display: flex; flex-wrap: wrap; gap: 5px; }
@@ -196,3 +219,61 @@ code { font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; 
   .brand { display: none; }
   .plate { width: 128px; font-size: 11px; }
 }
+
+
+@media (max-width: 600px) {
+  .inspector {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-height: 55%;
+    padding: 16px;
+  }
+
+  .inspector .card-image {
+    max-width: 120px;
+  }
+
+  .inspector .meta {
+    order: -1;
+  }
+
+  .actionbar {
+    left: 12px;
+    right: 12px;
+    bottom: max(160px, 28%);
+    width: auto;
+    min-width: 0;
+    max-height: 40%;
+    padding: 14px;
+  }
+
+  .rule {
+    font-size: 17px;
+  }
+
+  .selection {
+    gap: 10px;
+  }
+
+  .selection .btn,
+  .actionbar .end-turn {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .keys {
+    display: none;
+  }
+}
+
+@media (hover: none) {
+  .inspector:not(.is-pinned) {
+    display: none;
+  }
+
+  .keys {
+    display: none;
+  }
+}
+

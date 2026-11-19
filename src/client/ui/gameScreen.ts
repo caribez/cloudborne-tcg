@@ -763,6 +763,11 @@ private onHandClick(id: string): void {
       return;
     }
     box.hidden = false;
+    box.classList.toggle(
+  'is-pinned',
+  target.kind === 'table' &&
+  this.pinned === target.instanceId
+);
     box.innerHTML = `
       <img class="card-image" alt="${esc(info.title)}" src="${info.image}" />
       <div class="meta">
