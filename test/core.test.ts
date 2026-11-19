@@ -22,10 +22,10 @@ describe('card definitions and deck', () => {
 
   it('main deck is 4 copies of everything: 32 Characters, 24 Schemes, 16 Instants', () => {
     const byType = (t: string) => MAIN_DECK.filter((e) => getCardDefinition(e.defId).type === t);
-    expect(count(byType('character'))).toBe(32);
-    expect(count(byType('scheme'))).toBe(24);
+    expect(count(byType('character'))).toBe(44);
+    expect(count(byType('scheme'))).toBe(36);
     expect(count(byType('instant'))).toBe(16);
-    expect(count(MAIN_DECK)).toBe(72);
+    expect(count(MAIN_DECK)).toBe(96);
     expect(MAIN_DECK.some((e) => getCardDefinition(e.defId).type === 'child')).toBe(false);
     expect(count(CHILD_POOL)).toBe(12);
   });
@@ -49,7 +49,7 @@ describe('setup', () => {
       expect(s.players.map((p) => p.name)).toEqual(names(n));
       // Seat 0's first turn has already started: one automatic draw.
       expect(s.hands.map((h) => h.length)).toEqual([8, ...Array(n - 1).fill(7)]);
-      expect(s.drawPile).toHaveLength(72 - 7 * n - 1);
+      expect(s.drawPile).toHaveLength(96 - 7 * n - 1);
       expect(s.children.map((c) => c.length)).toEqual(Array(n).fill(2));
       expect(s.childPile).toHaveLength(12 - 2 * n);
       for (const f of s.families) expect(f.standings).toEqual({ aristocracy: 2, religion: 2, popularity: 2 });

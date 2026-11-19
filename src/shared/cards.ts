@@ -95,6 +95,10 @@ export const CHARACTERS: readonly CharacterDefinition[] = [
   character({ id: 'field-sister', name: 'Field Sister', cost: 2, affiliation: 'religion', tags: ['military', 'cloud-sister'], onRecruit: { religion: 1, popularity: 1 }, recurring: none, marriage: [{ religion: 1 }] }),
   character({ id: 'war-hero', name: 'War Hero', cost: 1, affiliation: 'popularity', tags: ['military'], onRecruit: { popularity: 1 }, recurring: none, marriage: null }),
   character({ id: 'wandering-troupe', name: 'Wandering Troupe', cost: 2, affiliation: 'popularity', tags: [], onRecruit: { popularity: 1, aristocracy: 1 }, recurring: { gold: 1, cards: 0 }, marriage: null }),
+  character({ id: 'city-administrator', name: 'City Administrator', cost: 2, affiliation: 'aristocracy', tags: ['noble'], onRecruit: { aristocracy: 1, religion: 1 }, recurring: { gold: 0, cards: 1 }, marriage: [{ aristocracy: 1 }, { religion: 1 }] }),
+  character({ id: 'gardener', name: 'Gardener', cost: 2, affiliation: 'religion', tags: [], onRecruit: { religion: 1, popularity: 1 }, recurring: none, marriage: null }),
+  character({ id: 'honor-guards', name: 'Honor Guards', cost: 2, affiliation: 'popularity', tags: ['military'], onRecruit: { popularity: 1, aristocracy: 1 }, recurring: none, marriage: null }),
+
 ];
 
 export const SCHEMES: readonly SchemeDefinition[] = [
@@ -103,6 +107,9 @@ export const SCHEMES: readonly SchemeDefinition[] = [
   scheme({ id: 'helping-the-poor', name: 'Helping the Poor', cost: 1, targetsOpponent: false, success: { owner: { popularity: 1 } }, revealed: { owner: { popularity: -1 } } }),
   scheme({ id: 'street-slander', name: 'Street Slander', cost: 1, targetsOpponent: true, success: { target: { popularity: -2 } }, revealed: { owner: { aristocracy: -1, popularity: -1 } } }),
   scheme({ id: 'furian-truce', name: 'Furian Truce', cost: 2, targetsOpponent: false, success: { owner: { aristocracy: 2, popularity: 1 } }, revealed: { owner: { popularity: -1 }, revealer: { popularity: 2 } } }),
+  scheme({ id: 'scandal-party', name: 'Scandal Party', cost: 1, targetsOpponent: true, success: { target: { aristocracy: -2 } }, revealed: { owner: { aristocracy: -2 } } }),
+  scheme({ id: 'inquisitor', name: 'Inquisitor', cost: 1, targetsOpponent: true, success: { target: { religion: -2 } }, revealed: { owner: { religion: -1, aristocracy: -1 } }, flavor: 'You know what to do.' }),
+  scheme({ id: 'phalannean-artifact', name: 'Phalannean Artifact', cost: 2, targetsOpponent: false, success: { owner: { religion: 2, aristocracy: 1 } }, revealed: { owner: { religion: -1, popularity: -2 } }, flavor: 'Have you heard? They found the Tomb of Feion on Mount Celes.' }),
   // PROVISIONAL experimental trap card (not a historical design).
   scheme({
     id: 'planted-scandal',

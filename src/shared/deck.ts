@@ -15,7 +15,7 @@ export interface DeckEntry {
 
 const copies = (n: number, defs: readonly { id: string }[]): DeckEntry[] => defs.map((d) => ({ defId: d.id, copies: n }));
 
-/** Shared main deck: 4 copies of every Character, Scheme and Instant (32 + 24 + 16 = 72 cards). */
+/** Shared main deck: 4 copies of every Character, Scheme and Instant (44 + 36 + 16 = 96 cards). */
 export const MAIN_DECK: readonly DeckEntry[] = [...copies(4, CHARACTERS), ...copies(4, SCHEMES), ...copies(4, INSTANTS)];
 
 /** Separate Child pool: 4 copies of each Child (12), enough for 2 Children × 4 families. */
