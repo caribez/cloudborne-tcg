@@ -1,15 +1,16 @@
 /**
  * The in-game screen shared by hotseat and LAN: HTML HUD + the Three.js table.
- * It holds presentation-only state (selection, rotation, inspection) and
- * submits intentions through the adapter. It never edits game state.
+ * It holds presentation-only state (selection, chosen target, inspection) and
+ * submits typed intentions through the adapter. It never edits game state and
+ * encodes no rules: playability, reasons and legal targets come from the view.
  */
-import { getCardDefinition, SUITS } from '../../shared/cards';
+import { getCardDefinition, type CardDefinition } from '../../shared/cards';
+import { marriageOptionText, rulesLines, STANDING_ABBR, typeLine } from '../../shared/cardText';
 import { describeLogEntry } from '../../shared/logText';
-import { normaliseRotation, ROTATION_STEP_DEG } from '../../shared/placement';
-import type { GameAction } from '../../shared/types';
-import type { PlayerView } from '../../shared/views';
-import { cardFrontDataUrl } from '../render/cardArt';
-import { TableScene, type TablePointer } from '../render/tableScene';
+import type { GameAction, LogEntry, PlayTarget, Seat } from '../../shared/types';
+import { HIDDEN, type PlayerView, type ViewHandCard, type ViewScheme } from '../../shared/views';
+import { cardColor, cardImageUrl } from '../render/cardArt';
+import { SEAT_COLORS, TableScene } from '../render/tableScene';
 import type { SubmitResult } from '../session/types';
 import { el, esc } from './dom';
 
@@ -24,40 +25,57 @@ export interface SeatDecor {
   readonly host?: boolean;
 }
 
-type Inspect = { kind: 'hand' | 'table'; instanceId: string };
+export interface ResultAction {
+  readonly label: string;
+  readonly onClick: () => void;
+  readonly primary?: boolean;
+}
+
+type Inspect = { readonly kind: 'hand' | 'table'; readonly instanceId: string };
+
+/** Log kinds worth a brief on-screen notice when they are new to this viewer. */
+const NOTABLE = new Set<LogEntry['kind']>(['challenge', 'response', 'allow', 'schemeRevealed', 'schemeSucceeded', 'marriage', 'gameOver']);
+
+const sameTarget = (a: PlayTarget | null, b: PlayTarget | null) => JSON.stringify(a) === JSON.stringify(b);
 
 export class GameScreen {
   readonly root: HTMLElement;
   private readonly scene: TableScene;
   private readonly els: {
-    players: HTMLElement;
+    status: HTMLElement;
     conn: HTMLElement;
     tools: HTMLElement;
     banner: HTMLElement;
     inspector: HTMLElement;
     log: HTMLOListElement;
-    status: HTMLElement;
+    turn: HTMLElement;
     hint: HTMLElement;
-    draw: HTMLButtonElement;
-    end: HTMLButtonElement;
+    decision: HTMLElement;
     selection: HTMLElement;
+    end: HTMLButtonElement;
     toast: HTMLElement;
+    plates: HTMLElement;
     deckLabel: HTMLElement;
-    handNote: HTMLElement;
+    discardLabel: HTMLElement;
+    results: HTMLElement;
   };
   private view: PlayerView | null = null;
   private decor: readonly SeatDecor[] = [];
+  private anchor: Seat = 0;
   private selected: string | null = null;
-  private rotation = 0;
+  private target: PlayTarget | null = null;
+  private marriagePick: { childId?: string; characterId?: string } = {};
   private hovered: Inspect | null = null;
-  private pinned: Inspect | null = null;
-  private stack: readonly string[] = [];
-  private stackIndex = 0;
+  private pinned: string | null = null;
   private busy = false;
   private blockedReason: string | null = null;
   private locked = false;
   private toastTimer = 0;
   private youLabel = 'you';
+  private lastSeenSeq = -1;
+  private resultActions: readonly ResultAction[] = [];
+  private resultsHidden = false;
+  private plateEls = new Map<Seat, HTMLElement>();
 
   constructor(
     host: HTMLElement,
@@ -66,84 +84,88 @@ export class GameScreen {
     this.root = el('div', 'game');
     this.root.innerHTML = `
       <div class="scene-host"></div>
-      <div class="deck-label" aria-hidden="true"><span class="deck-count">0</span><small>draw pile</small></div>
+      <div class="plates" aria-label="Families"></div>
+      <div class="pile-label deck-label" aria-hidden="true"></div>
+      <div class="pile-label discard-label" aria-hidden="true"></div>
       <header class="topbar">
         <div class="brand">Cloudborne <span class="mode-tag">${esc(options.modeLabel)}</span></div>
-        <div class="players" aria-label="Players"></div>
+        <div class="status" aria-live="polite"></div>
         <div class="conn" aria-live="polite"></div>
         <div class="tools"></div>
       </header>
       <div class="banner" role="status" hidden></div>
       <aside class="inspector" aria-live="polite" hidden></aside>
-      <aside class="log"><details open><summary>Log</summary><ol></ol></details></aside>
-      <div class="hand-note" hidden></div>
+      <aside class="log"><details open><summary>Event log</summary><ol></ol></details></aside>
       <section class="actionbar" aria-label="Turn actions">
         <div class="turn-status"></div>
         <div class="hint"></div>
-        <div class="buttons">
-          <button class="btn draw" type="button" title="Draw the top card (D)">Draw card</button>
-          <button class="btn primary end-turn" type="button">End turn</button>
-        </div>
+        <div class="decision" hidden></div>
         <div class="selection" hidden></div>
-        <div class="keys">Click a hand card, then the table to play it · Q/E rotate · Esc cancel · scroll to zoom</div>
+        <button class="btn primary end-turn" type="button">End turn</button>
+        <div class="keys">Click a hand card to select it · Esc cancels · scroll to zoom</div>
       </section>
+      <div class="results" hidden></div>
       <div class="toast" role="alert" hidden></div>
     `;
     host.appendChild(this.root);
     const q = <T extends HTMLElement>(sel: string) => this.root.querySelector(sel) as T;
     this.els = {
-      players: q('.players'),
+      status: q('.status'),
       conn: q('.conn'),
       tools: q('.tools'),
       banner: q('.banner'),
       inspector: q('.inspector'),
       log: q('.log ol'),
-      status: q('.turn-status'),
+      turn: q('.turn-status'),
       hint: q('.hint'),
-      draw: q('.draw'),
-      end: q('.end-turn'),
+      decision: q('.decision'),
       selection: q('.selection'),
+      end: q('.end-turn'),
       toast: q('.toast'),
+      plates: q('.plates'),
       deckLabel: q('.deck-label'),
-      handNote: q('.hand-note'),
+      discardLabel: q('.discard-label'),
+      results: q('.results'),
     };
 
-    this.scene = new TableScene(
-      q('.scene-host'),
-      {
-        onHandHover: (id) => this.setHovered(id ? { kind: 'hand', instanceId: id } : null),
-        onHandClick: (id) => this.onHandClick(id),
-        onTableHover: (info) => this.onTableHover(info),
-        onTableClick: (info) => this.onTableClick(info),
-        onDeckHover: () => {},
-        onDeckClick: () => void this.act({ type: 'draw' }),
-      },
-      this.els.deckLabel,
-    );
+    this.scene = new TableScene(q('.scene-host'), {
+      onHandHover: (id) => this.setHovered(id ? { kind: 'hand', instanceId: id } : null),
+      onHandClick: (id) => this.onHandClick(id),
+      onTableHover: (id) => this.setHovered(id ? { kind: 'table', instanceId: id } : null),
+      onTableClick: (id) => this.onTableClick(id),
+    });
+    this.scene.setLabel('deck', this.els.deckLabel);
+    this.scene.setLabel('discard', this.els.discardLabel);
+    this.updateHandInset();
+    window.addEventListener('resize', this.updateHandInset);
 
-    this.els.draw.addEventListener('click', () => void this.act({ type: 'draw' }));
     this.els.end.addEventListener('click', () => void this.act({ type: 'endTurn' }));
-    this.els.selection.addEventListener('click', (e) => {
-      const t = e.target as HTMLElement;
-      if (t.closest('[data-cancel]')) this.cancelSelection();
-      if (t.closest('[data-rot="-1"]')) this.rotate(-1);
-      if (t.closest('[data-rot="1"]')) this.rotate(1);
+    this.els.selection.addEventListener('click', (e) => this.onPanelClick(e));
+    this.els.decision.addEventListener('click', (e) => this.onPanelClick(e));
+    this.els.selection.addEventListener('mouseover', (e) => this.onPanelHover(e));
+    this.els.selection.addEventListener('mouseout', () => this.scene.setTableHighlight(null));
+    this.els.plates.addEventListener('click', (e) => {
+      const plate = (e.target as HTMLElement).closest<HTMLElement>('[data-seat]');
+      if (plate && plate.classList.contains('targetable')) this.chooseTarget({ kind: 'seat', seat: Number(plate.dataset.seat) });
     });
     this.els.inspector.addEventListener('click', (e) => {
-      const t = (e.target as HTMLElement).closest<HTMLElement>('[data-stack-index]');
-      if (t) {
-        this.stackIndex = Number(t.dataset.stackIndex);
-        const id = this.stack[this.stackIndex];
-        if (id) this.pin({ kind: 'table', instanceId: id });
-      }
       if ((e.target as HTMLElement).closest('[data-unpin]')) this.unpin();
     });
+    this.els.results.addEventListener('click', (e) => {
+      const t = e.target as HTMLElement;
+      const b = t.closest<HTMLElement>('[data-result-action]');
+      if (b) this.resultActions[Number(b.dataset.resultAction)]?.onClick();
+      if (t.closest('[data-close-results]')) {
+        this.resultsHidden = true;
+        this.renderResults();
+      }
+    });
     window.addEventListener('keydown', this.onKey);
-    // Opt-in hook for automated browser checks (scripts/e2e-*.mjs). Positions only.
+    // Opt-in hook for automated browser checks (scripts/e2e-*.mjs). Only what the view already shows.
     if (new URLSearchParams(location.search).has('e2e')) {
       (window as unknown as { __cloudborne?: unknown }).__cloudborne = {
         screen: () => this.scene.debugScreenInfo(),
-        tablePoint: (x: number, y: number) => this.scene.debugTablePointToScreen(x, y),
+        view: () => (this.view ? { viewer: this.view.viewer, revision: this.view.revision, phase: this.view.phase, decisionSeat: this.view.decisionSeat, round: this.view.round } : null),
       };
     }
   }
@@ -161,19 +183,26 @@ export class GameScreen {
   }
 
   showView(view: PlayerView, opts: { animate: boolean; decor?: readonly SeatDecor[]; youLabel?: string }): void {
+    const prev = this.view;
     this.view = view;
-    this.decor = opts.decor ?? [];
+    this.decor = opts.decor ?? this.decor;
     if (opts.youLabel) this.youLabel = opts.youLabel;
-    if (this.selected && !view.hand.some((c) => c.instanceId === this.selected)) this.selected = null;
-    if (this.pinned && !this.cardExists(this.pinned)) this.pinned = null;
+    if (view.viewer !== null) this.anchor = view.viewer;
+    // Drop presentation state that no longer matches the view.
+    const sel = this.selectedCard();
+    if (this.selected && (!sel || (this.target && !sel.targets?.some((t) => sameTarget(t, this.target))))) this.cancelSelection(false);
+    if (this.pinned && !this.tableCardExists(this.pinned)) this.pinned = null;
     if (this.hovered && !this.cardExists(this.hovered)) this.hovered = null;
-    this.scene.setView(view, { animate: opts.animate });
+    if (!view.result) this.resultsHidden = false;
+    this.scene.setView(view, { animate: opts.animate, anchor: this.anchor });
     this.scene.setSelected(this.selected);
+    this.announceNew(prev);
     this.render();
   }
 
   /** Disconnected / paused: input disabled with an explanation. */
   setBlocked(reason: string | null): void {
+    if (reason === this.blockedReason) return;
     this.blockedReason = reason;
     if (reason) this.cancelSelection();
     this.applyInputState();
@@ -185,17 +214,19 @@ export class GameScreen {
     this.locked = locked;
     if (locked) this.clearPrivate();
     this.applyInputState();
+    this.render();
   }
 
   clearPrivate(): void {
     this.selected = null;
-    this.rotation = 0;
+    this.target = null;
+    this.marriagePick = {};
     this.hovered = null;
     this.pinned = null;
-    this.stack = [];
     this.scene.clearTransient();
-    this.scene.setGhostRotation(0);
     this.hideToast();
+    this.els.decision.hidden = true;
+    this.els.decision.innerHTML = '';
     this.renderInspector();
     this.renderSelection();
   }
@@ -205,13 +236,22 @@ export class GameScreen {
     this.els.conn.dataset.kind = kind;
   }
 
-  flash(message: string, kind: 'error' | 'info' = 'error'): void {
+  /** Buttons on the final results screen (restart, menu, ...), supplied by the mode. */
+  setResultActions(actions: readonly ResultAction[]): void {
+    this.resultActions = actions;
+    this.renderResults();
+  }
+
+  flash(message: string, kind: 'error' | 'info' = 'error', ms?: number): void {
     const t = this.els.toast;
-    t.textContent = message;
+    t.innerHTML = message
+      .split('\n')
+      .map((line) => `<div>${esc(line)}</div>`)
+      .join('');
     t.dataset.kind = kind;
     t.hidden = false;
     window.clearTimeout(this.toastTimer);
-    this.toastTimer = window.setTimeout(() => (t.hidden = true), kind === 'error' ? 4500 : 2500);
+    this.toastTimer = window.setTimeout(() => (t.hidden = true), ms ?? (kind === 'error' ? 4500 : 3000));
   }
 
   private hideToast(): void {
@@ -219,14 +259,10 @@ export class GameScreen {
     this.els.toast.hidden = true;
   }
 
-  setHandNote(text: string | null): void {
-    this.els.handNote.hidden = !text;
-    this.els.handNote.textContent = text ?? '';
-  }
-
   dispose(): void {
     delete (window as unknown as { __cloudborne?: unknown }).__cloudborne;
     window.removeEventListener('keydown', this.onKey);
+    window.removeEventListener('resize', this.updateHandInset);
     window.clearTimeout(this.toastTimer);
     this.scene.dispose();
     this.root.remove();
@@ -238,9 +274,15 @@ export class GameScreen {
     return !this.locked && !this.blockedReason;
   }
 
+  private readonly updateHandInset = () => this.scene.setHandLeftInset(window.innerWidth > 900 ? 282 : 24);
+
   private applyInputState(): void {
     this.scene.setInputEnabled(this.inputAllowed);
     this.renderButtons();
+  }
+
+  private selectedCard(): ViewHandCard | null {
+    return (this.selected && this.view?.hand.find((c) => c.instanceId === this.selected)) || null;
   }
 
   private async act(action: GameAction): Promise<boolean> {
@@ -253,11 +295,12 @@ export class GameScreen {
         this.flash(result.message);
         return false;
       }
-      if (action.type === 'play') this.cancelSelection();
+      if (action.type === 'play' && action.cardId === this.selected) this.cancelSelection();
       return true;
     } finally {
       this.busy = false;
       this.renderButtons();
+      this.renderSelection();
     }
   }
 
@@ -269,82 +312,108 @@ export class GameScreen {
       return;
     }
     this.selected = id;
-    this.rotation = 0;
-    this.scene.setGhostRotation(0);
+    this.target = null;
+    this.marriagePick = {};
+    const card = this.selectedCard();
+    // Auto-pick the only possible target (e.g. Street Slander with one opponent).
+    if (card?.playable && card.targets?.length === 1) this.target = card.targets[0]!;
     this.scene.setSelected(id);
-    if (this.view && !this.view.can.play) {
-      this.flash(
-        this.view.activeSeat !== this.view.viewer
-          ? `You can look at this card, but it's ${this.view.players[this.view.activeSeat]?.name}'s turn.`
-          : 'You have already played a card this turn.',
-        'info',
-      );
-    }
     this.renderSelection();
     this.renderInspector();
+    this.renderPlates();
   }
 
-  private onTableHover(info: TablePointer): void {
-    const top = info.cardsUnder[0];
-    if (!this.selected && top) {
-      this.setHovered({ kind: 'table', instanceId: top }, info.cardsUnder);
-    } else if (this.hovered?.kind === 'table') {
-      this.setHovered(null);
-    }
-  }
-
-  private onTableClick(info: TablePointer): void {
+  private onTableClick(id: string | null): void {
     if (!this.inputAllowed) return;
-    if (this.selected) {
-      if (!info.point) return;
-      void this.act({ type: 'play', cardId: this.selected, x: info.point.x, y: info.point.y, rotation: this.rotation });
+    const card = this.selectedCard();
+    if (id && card?.targets?.length) {
+      const scheme = card.targets.find((t) => t.kind === 'scheme' && t.schemeId === id);
+      if (scheme) return this.chooseTarget(scheme);
+      const marriages = card.targets.filter((t) => t.kind === 'marriage');
+      const asChild = marriages.some((t) => t.kind === 'marriage' && t.childId === id);
+      const asCharacter = marriages.some((t) => t.kind === 'marriage' && t.characterId === id);
+      if (asChild || asCharacter) {
+        this.marriagePick = asChild ? { ...this.marriagePick, childId: id } : { ...this.marriagePick, characterId: id };
+        const matching = this.filteredTargets(card);
+        if (!matching.some((t) => sameTarget(t, this.target))) this.target = matching.length === 1 ? matching[0]! : null;
+        this.renderSelection();
+        this.updateMarks();
+        return;
+      }
+    }
+    if (id && id === this.pinned) this.unpin();
+    else if (id) {
+      this.pinned = id;
+      this.renderInspector();
+    } else this.unpin();
+  }
+
+  private chooseTarget(t: PlayTarget): void {
+    const card = this.selectedCard();
+    if (!card?.targets?.some((x) => sameTarget(x, t))) return;
+    this.target = t;
+    if (t.kind === 'marriage') this.marriagePick = { childId: t.childId, characterId: t.characterId };
+    this.renderSelection();
+    this.updateMarks();
+    this.renderPlates();
+  }
+
+  private filteredTargets(card: ViewHandCard): PlayTarget[] {
+    const p = this.marriagePick;
+    return (card.targets ?? []).filter((t) => t.kind !== 'marriage' || ((!p.childId || t.childId === p.childId) && (!p.characterId || t.characterId === p.characterId)));
+  }
+
+  private onPanelClick(e: Event): void {
+    const t = e.target as HTMLElement;
+    if (t.closest('[data-cancel]')) return this.cancelSelection();
+    if (t.closest('[data-clear-pick]')) {
+      this.marriagePick = {};
+      this.target = null;
+      this.renderSelection();
+      this.updateMarks();
       return;
     }
-    if (info.cardsUnder.length) {
-      // Repeated clicks on the same overlapping pile cycle through it.
-      const same = this.stack.length === info.cardsUnder.length && this.stack.every((id, i) => id === info.cardsUnder[i]);
-      this.stackIndex = same && this.pinned ? (this.stackIndex + 1) % info.cardsUnder.length : 0;
-      this.stack = info.cardsUnder;
-      this.pin({ kind: 'table', instanceId: this.stack[this.stackIndex]! });
-    } else {
-      this.unpin();
+    const targetBtn = t.closest<HTMLElement>('[data-target]');
+    if (targetBtn) return this.chooseTarget(JSON.parse(targetBtn.dataset.target!) as PlayTarget);
+    if (t.closest('[data-confirm]')) {
+      const card = this.selectedCard();
+      if (!card) return;
+      void this.act(this.target ? { type: 'play', cardId: card.instanceId, target: this.target } : { type: 'play', cardId: card.instanceId });
+      return;
     }
+    const respond = t.closest<HTMLElement>('[data-respond]');
+    if (respond) void this.act({ type: 'play', cardId: respond.dataset.respond! });
+    if (t.closest('[data-pass]')) void this.act({ type: 'pass' });
   }
 
-  private setHovered(target: Inspect | null, stack?: readonly string[]): void {
+  private onPanelHover(e: Event): void {
+    const b = (e.target as HTMLElement).closest<HTMLElement>('[data-target]');
+    if (!b) return;
+    const t = JSON.parse(b.dataset.target!) as PlayTarget;
+    this.scene.setTableHighlight(t.kind === 'scheme' ? t.schemeId : t.kind === 'marriage' ? t.characterId : null);
+  }
+
+  private setHovered(target: Inspect | null): void {
     this.hovered = target;
-    if (stack && !this.pinned) this.stack = stack;
-    this.renderInspector();
-  }
-
-  private pin(target: Inspect): void {
-    this.pinned = target;
-    if (target.kind === 'table') this.scene.setTableHighlight(target.instanceId);
     this.renderInspector();
   }
 
   private unpin(): void {
     if (!this.pinned) return;
     this.pinned = null;
-    this.scene.setTableHighlight(null);
     this.renderInspector();
   }
 
-  private cancelSelection(): void {
-    if (!this.selected) return;
+  private cancelSelection(render = true): void {
+    if (!this.selected && !this.target) return;
     this.selected = null;
-    this.rotation = 0;
-    this.scene.setGhostRotation(0);
+    this.target = null;
+    this.marriagePick = {};
     this.scene.setSelected(null);
+    if (!render) return;
     this.renderSelection();
     this.renderInspector();
-  }
-
-  private rotate(dir: 1 | -1): void {
-    if (!this.selected) return;
-    this.rotation = normaliseRotation(this.rotation + dir * ROTATION_STEP_DEG);
-    this.scene.setGhostRotation(this.rotation);
-    this.renderSelection();
+    this.renderPlates();
   }
 
   private readonly onKey = (e: KeyboardEvent) => {
@@ -354,138 +423,415 @@ export class GameScreen {
     if (e.key === 'Escape') {
       if (this.selected) this.cancelSelection();
       else this.unpin();
-      return;
     }
-    if (!this.inputAllowed || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
-    const k = e.key.toLowerCase();
-    if (k === 'q') this.rotate(-1);
-    else if (k === 'e') this.rotate(1);
-    else if (k === 'd') void this.act({ type: 'draw' });
   };
 
-  // ---------------------------------------------------------------- rendering
+  /** Briefly shows important public events that are new to this (private) viewer. */
+  private announceNew(prev: PlayerView | null): void {
+    const v = this.view!;
+    if (v.viewer === null) return; // public (privacy) views do not consume events
+    const fresh = v.log.filter((e) => e.seq > this.lastSeenSeq && NOTABLE.has(e.kind));
+    const first = this.lastSeenSeq < 0;
+    this.lastSeenSeq = v.log.at(-1)?.seq ?? this.lastSeenSeq;
+    if (first || !fresh.length) return;
+    void prev;
+    this.flash(
+      fresh
+        .slice(-3)
+        .map((e) => describeLogEntry(e, v.families))
+        .join('\n'),
+      'info',
+      5500,
+    );
+  }
+
+  // ---------------------------------------------------------------- rendering helpers
+
+  private name(seat: Seat): string {
+    return this.view?.families[seat]?.name ?? `Seat ${seat + 1}`;
+  }
+
+  private findScheme(id: string): ViewScheme | null {
+    for (const f of this.view?.families ?? []) {
+      const s = f.schemes.find((x) => x.instanceId === id);
+      if (s) return s;
+    }
+    return null;
+  }
+
+  private targetLabel(t: PlayTarget): string {
+    const v = this.view!;
+    switch (t.kind) {
+      case 'seat':
+        return `Target ${this.name(t.seat)}`;
+      case 'scheme': {
+        const s = this.findScheme(t.schemeId);
+        if (!s) return 'A hidden Scheme';
+        const list = v.families[s.owner]!.schemes;
+        const n = list.length > 1 ? ` #${list.indexOf(s) + 1}` : '';
+        return `${this.name(s.owner)}'s hidden Scheme${n} (placed in round ${s.placedRound})`;
+      }
+      case 'marriage': {
+        const child = getCardDefinition(this.defIdOf(t.childId) ?? '');
+        const ch = this.defIdOf(t.characterId) ?? '';
+        return `${child.name} ⚭ ${getCardDefinition(ch).name} (${marriageOptionText(ch, t.option)})`;
+      }
+    }
+  }
+
+  private defIdOf(instanceId: string): string | null {
+    for (const f of this.view?.families ?? []) {
+      const c = [...f.characters, ...f.children].find((x) => x.instanceId === instanceId);
+      if (c) return c.defId;
+    }
+    return null;
+  }
 
   private cardExists(t: Inspect): boolean {
     if (!this.view) return false;
-    return t.kind === 'hand'
-      ? this.view.hand.some((c) => c.instanceId === t.instanceId)
-      : this.view.table.some((c) => c.instanceId === t.instanceId);
+    return t.kind === 'hand' ? this.view.hand.some((c) => c.instanceId === t.instanceId) : this.tableCardExists(t.instanceId);
   }
+
+  private tableCardExists(id: string): boolean {
+    const v = this.view;
+    if (!v) return false;
+    return v.discard.some((c) => c.instanceId === id) || v.families.some((f) => [...f.characters, ...f.children, ...f.schemes].some((c) => c.instanceId === id));
+  }
+
+  private rulesHtml(def: CardDefinition): string {
+    return rulesLines(def)
+      .map((l) => `<div class="rule">${l.label ? `<b>${esc(l.label)}:</b> ` : ''}${esc(l.text)}</div>`)
+      .join('');
+  }
+
+  private updateMarks(): void {
+    const card = this.selectedCard();
+    const targets = new Set<string>();
+    const chosen = new Set<string>();
+    if (card?.playable && card.targets) {
+      for (const t of this.filteredTargets(card)) {
+        if (t.kind === 'scheme') targets.add(t.schemeId);
+        if (t.kind === 'marriage') {
+          targets.add(t.childId);
+          targets.add(t.characterId);
+        }
+      }
+      const p = this.marriagePick;
+      if (p.childId) chosen.add(p.childId);
+      if (p.characterId) chosen.add(p.characterId);
+      if (this.target?.kind === 'scheme') chosen.add(this.target.schemeId);
+    }
+    this.scene.setMarks({ targets, chosen });
+  }
+
+  // ---------------------------------------------------------------- rendering
 
   private render(): void {
     const v = this.view;
     if (!v) return;
-    const active = v.players[v.activeSeat];
-    this.els.players.innerHTML = v.players
-      .map((p) => {
-        const d = this.decor[p.seat] ?? {};
-        const classes = ['player', p.seat === v.activeSeat ? 'active' : '', p.seat === v.viewer ? 'me' : '', d.connected === false ? 'away' : '']
-          .filter(Boolean)
-          .join(' ');
-        return `<div class="${classes}">
-          ${d.connected === undefined ? '' : `<span class="dot" title="${d.connected ? 'Connected' : 'Disconnected'}"></span>`}
-          <span class="pname">${esc(p.name)}${p.seat === v.viewer ? ` <em>(${esc(this.youLabel)})</em>` : ''}${d.host ? ' <span class="host" title="Lobby host">host</span>' : ''}</span>
-          <span class="count" title="Cards in hand">${p.handCount} ${p.handCount === 1 ? 'card' : 'cards'}</span>
-          ${p.seat === v.activeSeat ? '<span class="turn-tag">turn</span>' : ''}
-        </div>`;
-      })
-      .join('');
-    (this.els.deckLabel.querySelector('.deck-count') as HTMLElement).textContent = String(v.drawPileCount);
-    this.els.deckLabel.classList.toggle('empty', v.drawPileCount === 0);
-
-    const yours = v.viewer !== null && v.viewer === v.activeSeat;
-    this.els.status.innerHTML = `Turn ${v.turnNumber} · ${yours ? '<strong>Your turn</strong>' : `${esc(active?.name ?? '')}'s turn`}`;
-    this.els.hint.textContent = this.blockedReason ?? (yours ? v.hint : v.viewer !== null ? 'Waiting for your turn. You can inspect cards meanwhile.' : '');
+    const status: string[] = [`<span class="round">Round ${Math.min(v.round, v.maxRounds)} / ${v.maxRounds}</span>`];
+    if (v.finalRound && v.phase !== 'finished') status.push('<span class="badge warn">Final round: no new Schemes</span>');
+    if (v.phase === 'finished') status.push('<strong>Game over</strong>');
+    else {
+      const yours = v.viewer !== null && v.viewer === v.activeSeat;
+      status.push(yours ? '<strong>Your turn</strong>' : `${esc(this.name(v.activeSeat))}'s turn`);
+      if (v.reaction) {
+        const me = v.viewer === v.reaction.reactor;
+        status.push(`<span class="badge alert">${me ? 'You must respond' : `${esc(this.name(v.reaction.reactor))} is responding`}</span>`);
+      }
+    }
+    this.els.status.innerHTML = status.join(' · ');
+    this.els.turn.innerHTML = this.turnText(v);
+    this.els.hint.textContent = this.blockedReason ?? v.hint;
     this.els.banner.hidden = !this.blockedReason;
     this.els.banner.textContent = this.blockedReason ?? '';
+    this.els.deckLabel.innerHTML = `<b>${v.drawPileCount}</b><small>deck</small>`;
+    this.els.deckLabel.classList.toggle('empty', v.drawPileCount === 0);
+    this.els.discardLabel.innerHTML = `<b>${v.discard.length}</b><small>discard</small>`;
 
     this.els.log.innerHTML = v.log
-      .slice(-12)
-      .map((e) => `<li>${esc(describeLogEntry(e, v.players))}</li>`)
+      .slice(-40)
+      .map((e) => `<li class="k-${e.kind}">${esc(describeLogEntry(e, v.families))}</li>`)
       .join('');
     this.els.log.scrollTop = this.els.log.scrollHeight;
+    this.renderPlates();
     this.renderButtons();
+    this.renderDecision();
     this.renderSelection();
     this.renderInspector();
+    this.renderResults();
+  }
+
+  private turnText(v: PlayerView): string {
+    if (v.viewer === null) return '';
+    const f = v.families[v.viewer]!;
+    return `<span class="me-res">${esc(f.name)}: <b>${f.gold}</b> Gold · ${f.handCount} in hand · score <b>${f.score}</b></span>`;
+  }
+
+  private renderPlates(): void {
+    const v = this.view;
+    if (!v) return;
+    const card = this.selectedCard();
+    const seatTargets = new Set(card?.playable ? (card.targets ?? []).filter((t) => t.kind === 'seat').map((t) => (t.kind === 'seat' ? t.seat : -1)) : []);
+    const chosenSeat = this.target?.kind === 'seat' ? this.target.seat : null;
+    for (const f of v.families) {
+      let plate = this.plateEls.get(f.seat);
+      if (!plate) {
+        plate = el('div', 'plate');
+        plate.dataset.seat = String(f.seat);
+        plate.style.setProperty('--seat', SEAT_COLORS[f.seat % SEAT_COLORS.length]!);
+        this.els.plates.appendChild(plate);
+        this.plateEls.set(f.seat, plate);
+        this.scene.setLabel(`band:${f.seat}`, plate);
+      }
+      const d = this.decor[f.seat] ?? {};
+      const deciding = v.decisionSeat === f.seat && v.reaction !== null;
+      plate.className = [
+        'plate',
+        f.seat === v.activeSeat && v.phase !== 'finished' ? 'active' : '',
+        f.seat === v.viewer ? 'me' : '',
+        d.connected === false ? 'away' : '',
+        deciding ? 'deciding' : '',
+        seatTargets.has(f.seat) ? 'targetable' : '',
+        chosenSeat === f.seat ? 'chosen' : '',
+        v.result?.winners.includes(f.seat) ? 'winner' : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      const tag = deciding ? '<span class="tag deciding">deciding</span>' : f.seat === v.activeSeat && v.phase !== 'finished' ? '<span class="tag">turn</span>' : '';
+      plate.innerHTML = `
+        <div class="pl-top">
+          ${d.connected === undefined ? '' : `<span class="dot" title="${d.connected ? 'Connected' : 'Disconnected'}"></span>`}
+          <span class="pl-name">${esc(f.name)}</span>${f.seat === v.viewer ? ` <em>(${esc(this.youLabel)})</em>` : ''}
+          ${d.host ? '<span class="host" title="Lobby host">host</span>' : ''} ${tag}
+        </div>
+        <div class="pl-stand" title="Aristocracy · Religion · Popularity = score">
+          <span class="st a">${STANDING_ABBR.aristocracy} ${f.standings.aristocracy}</span>
+          <span class="st r">${STANDING_ABBR.religion} ${f.standings.religion}</span>
+          <span class="st p">${STANDING_ABBR.popularity} ${f.standings.popularity}</span>
+          <span class="score">= ${f.score}</span>
+        </div>
+        <div class="pl-res"><span class="gold">${f.gold} Gold</span> · ${f.handCount} in hand${f.schemes.length ? ` · ${f.schemes.length} Scheme${f.schemes.length > 1 ? 's' : ''}` : ''}</div>`;
+    }
   }
 
   private renderButtons(): void {
     const v = this.view;
     const ok = this.inputAllowed && !this.busy && v !== null;
-    this.els.draw.disabled = !(ok && v!.can.draw);
     this.els.end.disabled = !(ok && v!.can.endTurn);
-    this.els.draw.title = v && v.drawPileCount === 0 ? 'The draw pile is empty' : 'Draw the top card (D)';
+    this.els.end.hidden = v?.phase === 'finished';
+    for (const b of this.root.querySelectorAll<HTMLButtonElement>('[data-confirm],[data-respond],[data-pass]')) {
+      if (!ok) b.disabled = true;
+    }
+  }
+
+  private renderDecision(): void {
+    const v = this.view;
+    const box = this.els.decision;
+    const r = v?.reaction;
+    if (!v || !r || v.viewer !== r.reactor || this.locked) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    const scheme = this.findScheme(r.schemeId);
+    const def = scheme && scheme.defId !== HIDDEN ? getCardDefinition(scheme.defId) : null;
+    const responses = v.hand.filter((c) => {
+      const d = getCardDefinition(c.defId);
+      return d.type === 'instant' && d.timing === 'reaction';
+    });
+    const disabled = !this.inputAllowed || this.busy ? 'disabled' : '';
+    box.hidden = false;
+    box.innerHTML = `
+      <h4>Your Scheme is being investigated</h4>
+      <p>${esc(this.name(r.initiator))} played Senate Intervention against your hidden Scheme${def ? ` <strong>${esc(def.name)}</strong>` : ''}.</p>
+      ${def && def.type === 'scheme' ? `<p class="if-revealed"><b>If revealed:</b> ${esc(rulesLines(def)[1]?.text ?? '')}</p>` : ''}
+      <div class="responses">
+        ${responses
+          .map((c) => {
+            const d = getCardDefinition(c.defId);
+            return `<button type="button" class="btn" data-respond="${esc(c.instanceId)}" ${c.playable ? disabled : 'disabled'} title="${esc(c.reason ?? (d.type === 'instant' ? d.text : ''))}">Play ${esc(d.name)} (${d.cost} Gold)</button>`;
+          })
+          .join('')}
+        ${responses.length ? '' : '<div class="note">You hold no Corruption or Vanish in the Crowd.</div>'}
+        <button type="button" class="btn primary" data-pass ${disabled}>Allow the investigation</button>
+      </div>`;
   }
 
   private renderSelection(): void {
     const s = this.els.selection;
-    if (!this.selected || !this.view) {
+    const card = this.selectedCard();
+    const v = this.view;
+    if (!card || !v) {
       s.hidden = true;
+      s.innerHTML = '';
+      this.updateMarks();
       return;
     }
-    const card = this.view.hand.find((c) => c.instanceId === this.selected);
-    if (!card) {
-      s.hidden = true;
-      return;
-    }
+    const def = getCardDefinition(card.defId);
+    const verb = def.type === 'character' ? 'Recruit' : def.type === 'scheme' ? 'Place Scheme' : 'Play';
+    const targets = card.targets ? this.filteredTargets(card) : null;
+    const needsTarget = card.targets !== null;
+    const prompt =
+      !needsTarget || !card.playable
+        ? ''
+        : card.targets!.some((t) => t.kind === 'seat')
+          ? 'Choose an opponent (or click their nameplate):'
+          : card.targets!.some((t) => t.kind === 'scheme')
+            ? 'Choose a hidden Scheme to investigate (highlighted green):'
+            : 'Choose a Child and a Character (highlighted green):';
+    const canConfirm = card.playable && (!needsTarget || this.target !== null) && this.inputAllowed && !this.busy;
+    const pick = this.marriagePick.childId || this.marriagePick.characterId;
     s.hidden = false;
     s.innerHTML = `
-      <div>Placing <strong>${esc(getCardDefinition(card.defId).name)}</strong> · click the table</div>
+      <div class="sel-head" style="--card:${cardColor(def)}"><strong>${esc(def.name)}</strong> <span class="cost">${def.cost} Gold</span></div>
+      <div class="sel-type">${esc(typeLine(def))}</div>
+      <div class="sel-rules">${this.rulesHtml(def)}</div>
+      ${card.playable ? '' : `<div class="why">Not playable now: ${esc(card.reason ?? '')}</div>`}
+      ${prompt ? `<div class="prompt">${esc(prompt)}</div>` : ''}
+      ${
+        targets && card.playable
+          ? `<div class="targets">${targets
+              .map((t) => `<button type="button" class="btn small target ${sameTarget(t, this.target) ? 'on' : ''}" data-target='${esc(JSON.stringify(t))}'>${esc(this.targetLabel(t))}</button>`)
+              .join('')}${pick ? '<button type="button" class="linkish" data-clear-pick>Show all combinations</button>' : ''}</div>`
+          : ''
+      }
       <div class="row">
-        <button class="btn small" data-rot="-1" type="button" title="Rotate left (Q)">⟲ Q</button>
-        <span class="rot">${this.rotation}°</span>
-        <button class="btn small" data-rot="1" type="button" title="Rotate right (E)">E ⟳</button>
-        <button class="btn small danger" data-cancel type="button">Cancel (Esc)</button>
+        <button type="button" class="btn primary" data-confirm ${canConfirm ? '' : 'disabled'}>${esc(verb)} (${def.cost} Gold)</button>
+        <button type="button" class="btn small danger" data-cancel>Cancel (Esc)</button>
       </div>`;
+    this.updateMarks();
   }
 
   private renderInspector(): void {
     const box = this.els.inspector;
     const v = this.view;
-    // Priority: hovering a hand card > a pinned (clicked) table card > hovering the table > the selection.
-    const handHover = this.hovered?.kind === 'hand' ? this.hovered : null;
-    const target = handHover ?? this.pinned ?? this.hovered ?? (this.selected ? { kind: 'hand' as const, instanceId: this.selected } : null);
-    if (!v || !target || !this.cardExists(target)) {
+    // Priority: hovering a hand card > a pinned table card > hovering the table.
+    // (The selected card's details are already in the action panel.)
+    const handHover = this.hovered?.kind === 'hand' && this.hovered.instanceId !== this.selected ? this.hovered : null;
+    const target: Inspect | null = handHover ?? (this.pinned ? { kind: 'table', instanceId: this.pinned } : null) ?? (this.hovered?.kind === 'table' ? this.hovered : null);
+    if (!v || this.locked || !target || !this.cardExists(target)) {
       box.hidden = true;
       box.innerHTML = '';
       return;
     }
-    const defId =
-      target.kind === 'hand'
-        ? v.hand.find((c) => c.instanceId === target.instanceId)!.defId
-        : v.table.find((c) => c.instanceId === target.instanceId)!.defId;
-    if (defId === 'hidden') {
+    const info = target.kind === 'hand' ? this.handInfo(target.instanceId) : this.tableInfo(target.instanceId);
+    if (!info) {
       box.hidden = true;
       return;
     }
-    const def = getCardDefinition(defId);
-    let where = 'In your hand';
-    if (target.kind === 'table') {
-      const t = v.table.find((c) => c.instanceId === target.instanceId)!;
-      where = `On the table · played by ${esc(v.players[t.playedBy]?.name ?? '?')} · ${t.rotation}°`;
-    }
-    const showStack = target.kind === 'table' && this.stack.length > 1 && this.stack.includes(target.instanceId);
     box.hidden = false;
     box.innerHTML = `
-      <img class="card-image" alt="${esc(def.name)}" src="${cardFrontDataUrl(defId)}" />
+      <img class="card-image" alt="${esc(info.title)}" src="${info.image}" />
       <div class="meta">
-        <h3>${esc(def.name)}</h3>
-        <div class="sub" style="--suit:${SUITS[def.suit].color}">${esc(SUITS[def.suit].name)} · value ${def.value}</div>
-        <p>${esc(def.text)}</p>
-        <div class="where">${where}</div>
-        ${
-          showStack
-            ? `<div class="stack"><div>${this.stack.length} overlapping cards here (top first). Click the pile again to cycle, or pick:</div>
-               <ol>${this.stack
-                 .map((id, i) => {
-                   const c = v.table.find((t) => t.instanceId === id);
-                   const name = c && c.defId !== 'hidden' ? getCardDefinition(c.defId).name : 'Face-down card';
-                   return `<li><button type="button" class="linkish ${id === target.instanceId ? 'current' : ''}" data-stack-index="${i}">${esc(name)}</button></li>`;
-                 })
-                 .join('')}</ol></div>`
-            : ''
-        }
-        ${this.pinned && target === this.pinned ? '<button type="button" class="btn small" data-unpin>Close (Esc)</button>' : ''}
+        <h3>${esc(info.title)}</h3>
+        ${info.sub ? `<div class="sub" style="--card:${info.color}">${esc(info.sub)}</div>` : ''}
+        ${info.body}
+        <div class="where">${info.where}</div>
+        ${this.pinned === target.instanceId ? '<button type="button" class="btn small" data-unpin>Close (Esc)</button>' : ''}
+      </div>`;
+  }
+
+  private handInfo(id: string) {
+    const c = this.view!.hand.find((x) => x.instanceId === id)!;
+    const def = getCardDefinition(c.defId);
+    return {
+      title: def.name,
+      sub: `${typeLine(def)} · ${def.cost} Gold`,
+      color: cardColor(def),
+      image: cardImageUrl(def.id),
+      body: `${this.rulesHtml(def)}${def.flavor ? `<p class="flavor">${esc(def.flavor)}</p>` : ''}`,
+      where: `In your hand · ${c.playable ? '<span class="ok">playable now</span>' : `not playable: ${esc(c.reason ?? '')}`}`,
+    };
+  }
+
+  private tableInfo(id: string) {
+    const v = this.view!;
+    const scheme = this.findScheme(id);
+    if (scheme && scheme.defId === HIDDEN) {
+      // Never derive anything from a hidden card's identity: only public facts.
+      return {
+        title: 'Hidden Scheme',
+        sub: `Scheme of ${this.name(scheme.owner)}`,
+        color: '#5d3c7e',
+        image: cardImageUrl(HIDDEN),
+        body: `<p>Its identity and target are secret. It resolves at the start of ${esc(this.name(scheme.owner))}'s turn in round ${scheme.resolvesInRound} unless it is exposed first.</p>
+          ${scheme.challenged ? '<p class="alert">Under investigation right now.</p>' : ''}`,
+        where: `Placed in round ${scheme.placedRound}`,
+      };
+    }
+    let defId: string | null = scheme?.defId ?? null;
+    let where = '';
+    const family = v.families.find((f) => [...f.characters, ...f.children].some((c) => c.instanceId === id));
+    if (scheme) {
+      where = `Your hidden Scheme: opponents see only the card back. Resolves at the start of your turn in round ${scheme.resolvesInRound}.${
+        scheme.target !== null ? ` Aimed at ${esc(this.name(scheme.target))}.` : ''
+      }${scheme.challenged ? ' <span class="alert">Under investigation!</span>' : ''}`;
+    } else if (family) {
+      const isChild = family.children.some((c) => c.instanceId === id);
+      defId = [...family.characters, ...family.children].find((c) => c.instanceId === id)!.defId;
+      const m = v.marriages.find((x) => x.childId === id || x.characterId === id);
+      const spouse = m ? (isChild ? m.characterId : m.childId) : null;
+      const spouseName = spouse ? getCardDefinition(this.defIdOf(spouse) ?? '').name : null;
+      where = `${isChild ? 'Child' : 'Character'} of ${esc(family.name)}${spouseName ? ` · married to ${esc(spouseName)}` : isChild ? ' · unmarried' : ''}`;
+    } else {
+      const c = v.discard.find((x) => x.instanceId === id);
+      if (!c) return null;
+      defId = c.defId;
+      where = 'In the discard pile';
+    }
+    const def = getCardDefinition(defId!);
+    return {
+      title: def.name,
+      sub: `${typeLine(def)}${def.type === 'child' ? '' : ` · ${def.cost} Gold`}`,
+      color: cardColor(def),
+      image: cardImageUrl(def.id, !!scheme),
+      body: `${this.rulesHtml(def)}${def.flavor ? `<p class="flavor">${esc(def.flavor)}</p>` : ''}`,
+      where,
+    };
+  }
+
+  private renderResults(): void {
+    const v = this.view;
+    const box = this.els.results;
+    if (!v?.result || this.locked) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    if (this.resultsHidden) {
+      box.hidden = false;
+      box.className = 'results collapsed';
+      box.innerHTML = `<button type="button" class="btn primary" data-reopen>Show final results</button>`;
+      box.querySelector('[data-reopen]')!.addEventListener('click', () => {
+        this.resultsHidden = false;
+        this.renderResults();
+      });
+      return;
+    }
+    const r = v.result;
+    const winners = r.winners.map((s) => this.name(s));
+    const headline = winners.length > 1 ? `Shared victory: ${winners.join(' & ')}` : `${winners[0]} wins!`;
+    box.className = 'results';
+    box.hidden = false;
+    box.innerHTML = `
+      <div class="results-card" role="dialog" aria-label="Final results">
+        <div class="eyebrow">Game over after ${v.maxRounds} rounds</div>
+        <h2>${esc(headline)}</h2>
+        <table>
+          <thead><tr><th>Rank</th><th>Family</th><th title="Aristocracy">A</th><th title="Religion">R</th><th title="Popularity">P</th><th>Score</th></tr></thead>
+          <tbody>${r.scores
+            .map(
+              (s) => `<tr class="${r.winners.includes(s.seat) ? 'win' : ''}"><td>${s.rank}</td><td>${esc(this.name(s.seat))}${s.seat === v.viewer ? ' <em>(you)</em>' : ''}</td>
+              <td>${s.standings.aristocracy}</td><td>${s.standings.religion}</td><td>${s.standings.popularity}</td><td><b>${s.total}</b></td></tr>`,
+            )
+            .join('')}</tbody>
+        </table>
+        <p class="note">Provisional demo scoring: Aristocracy + Religion + Popularity. Gold does not count. Equal scores share the victory.</p>
+        <div class="row end">
+          <button type="button" class="btn" data-close-results>View table</button>
+          ${this.resultActions.map((a, i) => `<button type="button" class="btn ${a.primary ? 'primary' : ''}" data-result-action="${i}">${esc(a.label)}</button>`).join('')}
+        </div>
       </div>`;
   }
 }

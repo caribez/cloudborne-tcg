@@ -5,6 +5,7 @@
  */
 import { applyAction, setupGame } from '../../shared/engine';
 import { seededRng, type Rng } from '../../shared/random';
+import { decisionSeat } from '../../shared/rules';
 import type { GameAction, GameState, Seat } from '../../shared/types';
 import { playerView, publicView, type PlayerView } from '../../shared/views';
 import type { SubmitResult } from './types';
@@ -15,19 +16,39 @@ export function randomSeed(): number {
   return buf[0]!;
 }
 
+export interface HotseatOptions {
+  readonly rngFactory?: () => Rng;
+  /** Test hook: adjusts each freshly set-up game (same role as the LAN authority's). */
+  readonly prepareGame?: (state: GameState) => GameState;
+}
+
 export class HotseatSession {
   private state: GameState;
   private readonly listeners = new Set<() => void>();
+  private readonly rngFactory: () => Rng;
+  private readonly prepareGame: (state: GameState) => GameState;
 
   constructor(
     private readonly names: readonly string[],
-    private readonly rngFactory: () => Rng = () => seededRng(randomSeed()),
+    options: HotseatOptions | (() => Rng) = {},
   ) {
-    this.state = setupGame({ playerNames: names, rng: rngFactory() });
+    const opts = typeof options === 'function' ? { rngFactory: options } : options;
+    this.rngFactory = opts.rngFactory ?? (() => seededRng(randomSeed()));
+    this.prepareGame = opts.prepareGame ?? ((s) => s);
+    this.state = this.prepareGame(setupGame({ playerNames: names, rng: this.rngFactory() }));
   }
 
   get activeSeat(): Seat {
     return this.state.turn.activeSeat;
+  }
+
+  /** Who must decide next: the reactor during a reaction window, else the active player; null once finished. */
+  get prioritySeat(): Seat | null {
+    return decisionSeat(this.state);
+  }
+
+  get finished(): boolean {
+    return this.state.turn.phase === 'finished';
   }
 
   get revision(): number {
@@ -38,7 +59,7 @@ export class HotseatSession {
     return this.state.players[seat]?.name ?? `Player ${seat + 1}`;
   }
 
-  /** The private view for one seat. The UI only asks for the active, confirmed player. */
+  /** The private view for one seat. The UI only asks for the confirmed, revealed player. */
   viewFor(seat: Seat): PlayerView {
     return playerView(this.state, seat);
   }
@@ -47,7 +68,7 @@ export class HotseatSession {
     return publicView(this.state);
   }
 
-  /** Applies an action for `seat`. The caller (the hotseat UI) only passes the revealed active seat. */
+  /** Applies an action for `seat`. The hotseat UI only passes the revealed seat. */
   submit(seat: Seat, action: GameAction): SubmitResult {
     const result = applyAction(this.state, seat, action);
     if (!result.ok) return { ok: false, message: result.rejection.message };
@@ -57,7 +78,7 @@ export class HotseatSession {
   }
 
   restart(): void {
-    this.state = setupGame({ playerNames: this.names, rng: this.rngFactory(), initialRevision: this.state.revision + 1 });
+    this.state = this.prepareGame(setupGame({ playerNames: this.names, rng: this.rngFactory(), initialRevision: this.state.revision + 1 }));
     for (const fn of this.listeners) fn();
   }
 

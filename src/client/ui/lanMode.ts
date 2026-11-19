@@ -58,6 +58,15 @@ export function startLan(host: HTMLElement, onExit: () => void): () => void {
     game.addTool('Exit', () => {
       if (confirm('Leave this browser tab’s game? Your seat is kept while the game runs; reopen LAN mode in this tab to return.')) exit();
     });
+    const g = game;
+    g.setResultActions(
+      snap.you.isHost
+        ? [
+            { label: 'Restart game', primary: true, onClick: () => void client.lobby('restart').then((r) => r.ok || g.flash(r.message ?? 'Could not restart.')) },
+            { label: 'Back to lobby', onClick: () => void client.lobby('backToLobby').then((r) => r.ok || g.flash(r.message ?? 'Could not end the game.')) },
+          ]
+        : [{ label: 'Main menu', onClick: exit }],
+    );
     return game;
   }
 
