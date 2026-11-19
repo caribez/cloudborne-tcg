@@ -208,11 +208,13 @@ showView(
       (event) => event.seq > previousSeq
     );
 
-    for (const event of newEvents) {
-      if (CARD_PLAY_EVENTS.has(event.kind)) {
-        this.audio.playCard();
-      }
-    }
+for (const event of newEvents) {
+  if (CARD_PLAY_EVENTS.has(event.kind)) {
+    this.audio.playCard();
+  } else if (event.kind === 'turnStart') {
+    this.audio.playTurnStart();
+  }
+}
   }
 
   this.view = view;

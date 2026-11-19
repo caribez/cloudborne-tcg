@@ -6,6 +6,7 @@ import cardSelect01 from '../assets/sounds/card_select01.mp3?url';
 import cardSelect02 from '../assets/sounds/card_select02.mp3?url';
 import cardSelect03 from '../assets/sounds/card_select03.mp3?url';
 import music01 from '../assets/music/cloudborne-ingame-v01.mp3?url';
+import turnStart from '../assets/sounds/turn_start.mp3?url';
 
 export class AudioManager {
   private readonly cardSounds = [
@@ -20,6 +21,8 @@ export class AudioManager {
   new Audio(cardSelect03),
 ];
 
+private readonly turnStartSound = new Audio(turnStart);
+
   private readonly music = new Audio(music01);
 
   constructor() {
@@ -31,9 +34,12 @@ export class AudioManager {
       sound.preload = 'auto';
       sound.volume = 0.65;
     }
+    this.turnStartSound.preload = 'auto';
+    this.turnStartSound.volume = 0.6;
+
     this.music.preload = 'auto';
-this.music.loop = true;
-this.music.volume = 0.25;
+    this.music.loop = true;
+    this.music.volume = 0.25;
   }
 
   playCard(): void {
@@ -61,6 +67,14 @@ this.music.volume = 0.25;
 
   void sound.play().catch((error) => {
     console.warn('Could not play card selection sound:', error);
+  });
+}
+
+playTurnStart(): void {
+  this.turnStartSound.currentTime = 0;
+
+  void this.turnStartSound.play().catch((error) => {
+    console.warn('Could not play turn start sound:', error);
   });
 }
 
