@@ -120,8 +120,12 @@ export class TableScene {
     private readonly container: HTMLElement,
     private readonly callbacks: SceneCallbacks,
   ) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+this.renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  alpha: true
+});
+
+this.renderer.setClearColor(0x000000, 0);    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -141,10 +145,13 @@ export class TableScene {
     ]);
     this.deck.castShadow = true;
     this.scene.add(this.deck);
-    this.scene.background = new THREE.Color('#1d2128');
+this.scene.background = null;
 
-    this.scene.add(new THREE.HemisphereLight('#fff8ec', '#3a3a48', 1.6));
-    const sun = new THREE.DirectionalLight('#ffffff', 1.5);
+this.scene.add(
+  new THREE.HemisphereLight('#eef1f3', '#526779', 1.6)
+);
+const sun = new THREE.DirectionalLight('#fff0db', 1.5);
+
     sun.position.set(-25, 90, 40);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -429,16 +436,20 @@ export class TableScene {
     const h = b.maxY - b.minY;
     const cx = (b.minX + b.maxX) / 2;
     const cy = (b.minY + b.maxY) / 2;
-    const wood = new THREE.Mesh(new THREE.BoxGeometry(w + 8, 2, h + 8), new THREE.MeshStandardMaterial({ color: '#5a4030', roughness: 0.8 }));
+    const wood = new THREE.Mesh(new THREE.BoxGeometry(w + 8, 2, h + 8), new THREE.MeshStandardMaterial({color: '#82939f',roughness: 0.65}));
     wood.position.set(cx, -1.02, -cy);
     wood.receiveShadow = true;
     this.tableGroup.add(wood);
-    const felt = new THREE.Mesh(new THREE.PlaneGeometry(w + 2, h + 2).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: '#2f5b4b', roughness: 1 }));
+    const felt = new THREE.Mesh(new THREE.PlaneGeometry(w + 2, h + 2).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({color: '#b8c4ca', roughness: 0.8}));
     felt.position.set(cx, 0.001, -cy);
     felt.receiveShadow = true;
     this.tableGroup.add(felt);
 
-    const matMaterial = new THREE.MeshStandardMaterial({ color: '#376a57', roughness: 1 });
+const matMaterial = new THREE.MeshStandardMaterial({
+  color: '#d2d9db',
+  roughness: 0.85
+});
+
     const labelMats = new Map<string, THREE.MeshBasicMaterial>();
     const labelMat = (text: string) => {
       let m = labelMats.get(text);
@@ -472,7 +483,10 @@ export class TableScene {
         this.tableGroup.add(label);
       }
     }
-    const pileMat = new THREE.MeshStandardMaterial({ color: '#3b2b20', roughness: 1 });
+const pileMat = new THREE.MeshStandardMaterial({
+  color: '#93a5b2',
+  roughness: 0.8
+});
     for (const p of [layout.deck, layout.discard]) {
       const m = new THREE.Mesh(new THREE.PlaneGeometry(CARD_SIZE.width + 1.6, CARD_SIZE.height + 1.6).rotateX(-Math.PI / 2), pileMat);
       m.position.set(p.x, 0.005, -p.y);
