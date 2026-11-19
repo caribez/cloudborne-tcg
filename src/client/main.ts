@@ -3,6 +3,7 @@
  * that share the game core and the GameScreen presentation.
  */
 import './styles.css';
+import { audioManager } from './audio/audioManager';
 import { hasStoredLanSession } from './session/lanClient';
 import { el } from './ui/dom';
 import { startHotseat } from './ui/hotseatMode';
@@ -11,6 +12,10 @@ import { startLan } from './ui/lanMode';
 const MODE_KEY = 'cloudborne.mode';
 const app = document.getElementById('app')!;
 let stop: (() => void) | null = null;
+
+document.addEventListener('click', () => {
+  audioManager.startMusic();
+}, { capture: true });
 
 function setMode(mode: 'menu' | 'hotseat' | 'lan') {
   stop?.();

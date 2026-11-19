@@ -13,7 +13,7 @@ import { cardColor, cardImageUrl } from '../render/cardArt';
 import { SEAT_COLORS, TableScene } from '../render/tableScene';
 import type { SubmitResult } from '../session/types';
 import { el, esc } from './dom';
-import { AudioManager } from '../audio/audioManager';
+import { audioManager } from '../audio/audioManager';
 
 export interface GameScreenOptions {
   readonly modeLabel: string;
@@ -50,7 +50,7 @@ const sameTarget = (a: PlayTarget | null, b: PlayTarget | null) => JSON.stringif
 export class GameScreen {
   readonly root: HTMLElement;
   private readonly scene: TableScene;
-  private readonly audio = new AudioManager();  
+private readonly audio = audioManager;
   private readonly els: {
     status: HTMLElement;
     conn: HTMLElement;
@@ -335,14 +335,24 @@ showView(
     }
   }
 
-  private onHandClick(id: string): void {
-    if (!this.inputAllowed) return;
-    this.unpin();
-    if (this.selected === id) {
-      this.cancelSelection();
-      return;
-    }
-    this.selected = id;
+private onHandClick(id: string): void {
+  if (!this.inputAllowed) return;
+  this.unpin();
+  if (this.selected === id) {
+    this.cancelSelection();
+    return;
+  }
+
+  if (
+    this.view &&
+    this.view.viewer !== null &&
+    this.view.viewer === this.view.activeSeat &&
+    this.view.phase === 'action'
+  ) {
+    this.audio.playCardSelect();
+  }
+
+  this.selected = id;
     this.target = null;
     this.marriagePick = {};
     const card = this.selectedCard();
