@@ -13,6 +13,7 @@ import { cardColor, cardImageUrl } from '../render/cardArt';
 import { SEAT_COLORS, TableScene } from '../render/tableScene';
 import type { SubmitResult } from '../session/types';
 import { el, esc } from './dom';
+import { AudioManager } from '../audio/audioManager';
 
 export interface GameScreenOptions {
   readonly modeLabel: string;
@@ -36,11 +37,20 @@ type Inspect = { readonly kind: 'hand' | 'table'; readonly instanceId: string };
 /** Log kinds worth a brief on-screen notice when they are new to this viewer. */
 const NOTABLE = new Set<LogEntry['kind']>(['challenge', 'response', 'allow', 'schemeRevealed', 'schemeSucceeded', 'marriage', 'gameOver']);
 
+const CARD_PLAY_EVENTS = new Set<LogEntry['kind']>([
+  'recruit',
+  'schemePlaced',
+  'challenge',
+  'response',
+  'marriage',
+]);
+
 const sameTarget = (a: PlayTarget | null, b: PlayTarget | null) => JSON.stringify(a) === JSON.stringify(b);
 
 export class GameScreen {
   readonly root: HTMLElement;
   private readonly scene: TableScene;
+  private readonly audio = new AudioManager();  
   private readonly els: {
     status: HTMLElement;
     conn: HTMLElement;
@@ -182,8 +192,30 @@ export class GameScreen {
     return b;
   }
 
-  showView(view: PlayerView, opts: { animate: boolean; decor?: readonly SeatDecor[]; youLabel?: string }): void {
-    this.view = view;
+showView(
+  view: PlayerView,
+  opts: {
+    animate: boolean;
+    decor?: readonly SeatDecor[];
+    youLabel?: string;
+    playSounds?: boolean;
+  },
+): void {
+  const previousSeq = this.view?.log.at(-1)?.seq;
+
+  if (previousSeq !== undefined && opts.playSounds !== false) {
+    const newEvents = view.log.filter(
+      (event) => event.seq > previousSeq
+    );
+
+    for (const event of newEvents) {
+      if (CARD_PLAY_EVENTS.has(event.kind)) {
+        this.audio.playCard();
+      }
+    }
+  }
+
+  this.view = view;
     this.decor = opts.decor ?? this.decor;
     if (opts.youLabel) this.youLabel = opts.youLabel;
     if (view.viewer !== null) this.anchor = view.viewer;

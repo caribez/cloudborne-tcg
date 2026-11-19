@@ -15,6 +15,7 @@ export function startLan(host: HTMLElement, onExit: () => void): () => void {
   let game: GameScreen | null = null;
   let message = '';
   let lastLobbyKey = '';
+  let wasSynced = false;
 
   const exit = () => {
     cleanup();
@@ -76,13 +77,20 @@ export function startLan(host: HTMLElement, onExit: () => void): () => void {
     root.hidden = false;
   }
 
-  const unsubscribe = client.subscribe((s) => {
-    const snap = s.snapshot;
+const unsubscribe = client.subscribe((s) => {
+  const playSounds = s.synced && wasSynced;
+  wasSynced = s.synced;
+
+  const snap = s.snapshot;
     if (s.joined && snap?.lobby.phase === 'playing' && snap.game) {
       const g = ensureGame(snap);
       const decor = snap.lobby.seats.map((seat) => (seat ? { connected: seat.connected, host: seat.isHost } : {}));
-      g.showView(snap.game, { animate: true, decor, youLabel: 'you' });
-      const [text, kind] = connectionText(s);
+g.showView(snap.game, {
+  animate: true,
+  decor,
+  youLabel: 'you',
+  playSounds,
+});      const [text, kind] = connectionText(s);
       g.setConnection(text, kind);
       g.setBlocked(blockedReason(s));
       return;
