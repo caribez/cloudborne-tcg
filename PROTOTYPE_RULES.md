@@ -58,7 +58,8 @@ Pay the cost; the card goes face up into your Character area and its recruit bon
 | War Hero | 1 | Popularity | Military | +1 P | — | cannot marry |
 | Wandering Troupe | 2 | Popularity | — | +1 P, +1 A | +1 Gold | cannot marry |
 
-- Military is a tag, not a standing. **PROVISIONAL:** all Aristocracy Characters carry the Noble tag; Field Sister carries the Cloud Sister tag and its marriage bonus is a demo addition.
+- Military is a tag, not a standing. Character affiliations represent political influence, not social status. The noble tag is assigned individually and independently of affiliation. Aristocracy Characters are not necessarily nobles (e.g. Sivashir Slaves), and Characters of other affiliations may be nobles (e.g. Royal Mate).
+**PROVISIONAL** Field Sister carries the Cloud Sister tag and its marriage bonus is a demo addition.
 - **PROVISIONAL (demo resolution of a gap):** Royal Mate is also tagged Noble. Without it, no Child could ever marry Royal Mate, and its marriage choice would be unreachable.
 
 ### Schemes

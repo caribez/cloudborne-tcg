@@ -125,7 +125,7 @@ describe('game synchronization', () => {
         expect(g.viewer).toBe(seat);
         expect(g.hand.map((x) => x.instanceId)).toEqual(state.hands[seat]);
         expect(g.families.map((p) => p.handCount)).toEqual([8, ...Array(n - 1).fill(7)]);
-        expect(g.drawPileCount).toBe(96 - 7 * n - 1);
+        expect(g.drawPileCount).toBe(144 - 7 * n - 1);
         expect(g.families.map((f) => f.gold)).toEqual(state.families.map((f) => f.gold));
         expectNoLeak(c.received, state, seat);
       });

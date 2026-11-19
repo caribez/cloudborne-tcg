@@ -13,19 +13,19 @@ const count = (deck: readonly { copies: number }[]) => deck.reduce((n, e) => n +
 
 describe('card definitions and deck', () => {
   it('has the demo cards with unique ids', () => {
-    expect(CHARACTERS).toHaveLength(8);
-    expect(SCHEMES).toHaveLength(6);
+    expect(CHARACTERS).toHaveLength(17);
+    expect(SCHEMES).toHaveLength(15);
     expect(INSTANTS).toHaveLength(4);
     expect(CHILDREN).toHaveLength(3);
     expect(new Set(CARD_DEFINITIONS.map((d) => d.id)).size).toBe(CARD_DEFINITIONS.length);
   });
 
-  it('main deck is 4 copies of everything: 32 Characters, 24 Schemes, 16 Instants', () => {
+  it('main deck is 4 copies of everything: 68 Characters, 60 Schemes, 16 Instants', () => {
     const byType = (t: string) => MAIN_DECK.filter((e) => getCardDefinition(e.defId).type === t);
-    expect(count(byType('character'))).toBe(44);
-    expect(count(byType('scheme'))).toBe(36);
-    expect(count(byType('instant'))).toBe(16);
-    expect(count(MAIN_DECK)).toBe(96);
+expect(count(byType('character'))).toBe(68);
+expect(count(byType('scheme'))).toBe(60);
+expect(count(byType('instant'))).toBe(16);
+expect(count(MAIN_DECK)).toBe(144);
     expect(MAIN_DECK.some((e) => getCardDefinition(e.defId).type === 'child')).toBe(false);
     expect(count(CHILD_POOL)).toBe(12);
   });
@@ -37,7 +37,16 @@ describe('card definitions and deck', () => {
     };
     for (const id of ['cloud-guard', 'captain-teos', 'field-sister', 'war-hero']) expect(tags(id)).toContain('military');
     for (const id of ['merchant-king', 'scribe', 'royal-mate', 'wandering-troupe']) expect(tags(id)).not.toContain('military');
-    for (const c of CHARACTERS.filter((c) => c.affiliation === 'aristocracy')) expect(c.tags).toContain('noble');
+for (const id of [
+  'merchant-king',
+  'cloud-guard',
+  'captain-teos',
+  'royal-mate',
+  'city-administrator',
+  'palatin'
+]) expect(tags(id)).toContain('noble');
+
+expect(tags('sivashir-slaves')).not.toContain('noble');
     expect(tags('field-sister')).toContain('cloud-sister');
   });
 });
@@ -49,7 +58,7 @@ describe('setup', () => {
       expect(s.players.map((p) => p.name)).toEqual(names(n));
       // Seat 0's first turn has already started: one automatic draw.
       expect(s.hands.map((h) => h.length)).toEqual([8, ...Array(n - 1).fill(7)]);
-      expect(s.drawPile).toHaveLength(96 - 7 * n - 1);
+      expect(s.drawPile).toHaveLength(144 - 7 * n - 1);      
       expect(s.children.map((c) => c.length)).toEqual(Array(n).fill(2));
       expect(s.childPile).toHaveLength(12 - 2 * n);
       for (const f of s.families) expect(f.standings).toEqual({ aristocracy: 2, religion: 2, popularity: 2 });
