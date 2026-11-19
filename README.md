@@ -8,7 +8,7 @@ The rules are **provisional demo rules**: see [`PROTOTYPE_RULES.md`](PROTOTYPE_R
 
 - Only the **host** computer needs [Node.js](https://nodejs.org/) **22.12 or newer** (npm included).
 - Players need a current desktop browser with WebGL (Chrome, Edge, Firefox, Safari).
-- Play doesn't use the internet. Everything is bundled locally, including card art, which is generated in the browser.
+- Play doesn't use the internet. Everything is bundled locally, including card art, which is generated in the browser. Third-party assets and their licenses are listed in [`CREDITS.md`](CREDITS.md).
 
 ## Commands
 
