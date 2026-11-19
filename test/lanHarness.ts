@@ -12,7 +12,7 @@ import type {
   SimpleAck,
 } from '../src/shared/protocol';
 import { seededRng } from '../src/shared/random';
-import type { GameAction } from '../src/shared/types';
+import type { GameAction, GameState } from '../src/shared/types';
 import { attachLanServer, type LanServer } from '../src/server/socketServer';
 
 export type ClientSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -40,9 +40,9 @@ export interface Harness {
 
 let cmdCounter = 0;
 
-export async function startHarness(seed = 1234, lobbyGraceMs = 60_000): Promise<Harness> {
+export async function startHarness(seed = 1234, lobbyGraceMs = 60_000, prepareGame?: (s: GameState) => GameState): Promise<Harness> {
   const http = createServer();
-  const server = attachLanServer(http, { rngFactory: () => seededRng(seed), lobbyGraceMs });
+  const server = attachLanServer(http, { rngFactory: () => seededRng(seed), lobbyGraceMs, ...(prepareGame ? { prepareGame } : {}) });
   await new Promise<void>((r) => http.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
   const clients: TestClient[] = [];

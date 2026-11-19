@@ -1,16 +1,16 @@
 # Card game prototype
 
 ## Project intent
-Build a browser-based card-game prototype for 2–4 human players.
-The initial phase establishes hands, a draw pile, a shared tabletop, hotseat, and LAN play.
+Cloudborne: a browser-based political and dynastic card game for 2–4 human players, playable in hotseat and LAN.
+The current build is a playable demo (standings, Gold, Characters, hidden Schemes with reactions, marriage, 8-round provisional scoring).
 The rules are being workshopped. Optimize for quick rule changes, readable interactions, and reliable shared state.
 
 ## Scope and references
-- Use the implementation brief for feature requirements. If saved in the repository, keep it at `docs/prototype-brief.md`.
-- Keep current rules and explicitly provisional assumptions in `PROTOTYPE_RULES.md`. Create it during setup.
-- When the user changes a rule, update that document and affected behavior/tests together. Later approved decisions supersede the original temporary rules.
-- Do not invent scoring, victory conditions, card effects, or balancing unless requested. Use the brief's temporary rules until revised.
-- Initial scope excludes accounts, databases, matchmaking, AI opponents, physics, mixed hotseat/LAN seats, and a generic rules editor.
+- Foundation brief: `docs/prototype-brief.md`. Design concept (long-term vs. demo): `docs/political-game-design.md`.
+- Keep the exact current rules and explicitly provisional assumptions in `PROTOTYPE_RULES.md`.
+- When the user changes a rule, update that document and affected behavior/tests together. Later approved decisions supersede earlier provisional rules.
+- Do not invent scoring, victory conditions, card effects, or balancing unless requested. Mark demo-only decisions as provisional.
+- Out of scope unless requested: accounts, databases, matchmaking, AI opponents, physics, mixed hotseat/LAN seats, a generic rules editor or card scripting language.
 
 ## Stack and commands
 Use strict TypeScript, Vite, Three.js, HTML/CSS, Node.js, Socket.IO, and Vitest.
@@ -31,7 +31,8 @@ These are target scripts until implemented. Check `package.json` before using th
 - Use serializable state and typed actions. Inject randomness at setup/shuffle boundaries so tests can reproduce behavior.
 - Distinguish card definitions from unique card instances. Every instance must occupy exactly one location.
 - Store table positions in logical coordinates, independent of camera and viewport.
-- Derive a player-specific view from canonical state. Presentation consumes that view and submits commands.
+- Derive a player-specific view from canonical state. Presentation consumes that view and submits commands; it encodes no rules (playability and legal targets come from the view).
+- Distinguish the active player from the player with decision priority (reaction windows). Hotseat handoffs follow decision priority.
 - Keep card data and rule functions in small, clearly named modules. Avoid speculative abstractions.
 - Animation must follow accepted state changes and must not determine game outcomes.
 
@@ -40,7 +41,8 @@ These are target scripts until implemented. Check `package.json` before using th
 - In hotseat, hide the outgoing hand, private previews, and animations immediately at handoff. Reveal the next hand only after explicit confirmation.
 - In LAN mode, show the local player's hand regardless of whose turn it is.
 - The LAN server owns the game state and validates every command using the authenticated session's seat.
-- Filter information before sending it. Never send opponents' private cards, deck order, shuffle seeds, or reconnect credentials in public payloads, logs, or errors.
+- Filter information before sending it. Never send opponents' private cards, hidden Scheme identities or targets, deck order, future income, shuffle seeds, or reconnect credentials in public payloads, logs, or errors. Instance ids stay opaque.
+- Test-only hooks (`prepareGame`, `?e2e&seed=` for hotseat, `CLOUDBORNE_TEST_SEED` for the host) must never be reachable by LAN clients.
 - Prefer complete filtered snapshots for this small turn-based prototype.
 - Deduplicate command IDs, validate revisions, and acknowledge acceptance or rejection.
 - Disable input while disconnected; resynchronize before accepting new input. Do not replay stale buffered commands.
@@ -64,7 +66,7 @@ Keep assets local and use generated placeholders during this phase. Add visual p
 
 ## Verification and handover
 Run type checking, relevant tests, and the build before reporting implementation complete.
-Test observable behavior: 2–4 player setup, action legality, turn limits, card conservation, hidden-information filtering, duplicate commands, and reconnect/seat recovery.
+Test observable behavior: 2–4 player setup, action legality, economy, Scheme timing and reactions, marriage, game end, card conservation, hidden-information filtering, duplicate commands, and reconnect/seat recovery. Use `test/fixtures.ts` for deterministic card situations.
 Check that the same initial state and actions yield equivalent results through both mode adapters.
 Exercise hotseat handoff and LAN synchronization in separate browser contexts when tooling permits.
 Distinguish automated checks, manual checks, and unverified behavior. Do not claim physical LAN testing unless performed.

@@ -1,45 +1,51 @@
 /**
  * Three.js presentation of the table. Consumes PlayerViews and reports pointer
- * intentions through callbacks; it never changes game state. Animations are
- * cosmetic: every tween can be finished instantly (`clearTransient`) and input
- * handling never waits for them.
+ * intentions through callbacks; it never changes game state. Card positions
+ * come from the shared logical layout (shared/layout.ts). Animations are
+ * cosmetic: every tween can be finished instantly (`clearTransient`), and
+ * hit-testing uses the logical layout, never animating meshes.
+ *
+ * Reconciliation is by instance id AND appearance: a card whose definition
+ * becomes known (a revealed Scheme) or unknown (viewer changed) gets its face
+ * replaced even though its id stayed the same.
  *
  * World mapping: logical table (x, y) -> world (x, 0, -y). +y is the far side.
  * Two layers are rendered: the perspective table and an orthographic,
  * pixel-space hand layer along the bottom of the screen.
  */
 import * as THREE from 'three';
-import { CARD_SIZE, isInsideTable, resolvePlacement, TABLE_BOUNDS } from '../../shared/placement';
-import type { PlayerView, ViewTableCard } from '../../shared/views';
+import { CARD_SIZE, computeLayout, ZONES, type LaidCard, type TableLayout } from '../../shared/layout';
+import type { Seat } from '../../shared/types';
+import { HIDDEN, type PlayerView } from '../../shared/views';
 import { cardBackCanvas, cardFrontCanvas } from './cardArt';
-
-export interface TablePointer {
-  /** Logical table point under the pointer, or null if off the table surface. */
-  readonly point: { x: number; y: number } | null;
-  /** Instance ids of table cards under the pointer, topmost first. */
-  readonly cardsUnder: readonly string[];
-}
 
 export interface SceneCallbacks {
   onHandHover(instanceId: string | null): void;
   onHandClick(instanceId: string): void;
-  onTableHover(info: TablePointer): void;
-  onTableClick(info: TablePointer): void;
-  onDeckHover(over: boolean): void;
-  onDeckClick(): void;
+  onTableHover(instanceId: string | null): void;
+  onTableClick(instanceId: string | null): void;
 }
 
-const CARD_T = 0.04; // thickness
-const STACK_STEP = 0.05; // vertical gap per table order
-const DECK_POS = new THREE.Vector3(TABLE_BOUNDS.minX - 8.5, 0, 0);
+/** Visual emphasis for table cards, decided by the screen (targets, selection). */
+export interface TableMarks {
+  readonly targets: ReadonlySet<string>;
+  readonly chosen: ReadonlySet<string>;
+}
+
+export const SEAT_COLORS = ['#e0b45a', '#6fb7e8', '#d483cf', '#7fd48a'];
+
+const CARD_T = 0.04;
+const STACK_STEP = 0.05;
 const DECK_CARD_T = 0.07;
-const HAND_FRACTION = 0.27; // share of the screen height reserved for the hand
+const HAND_FRACTION = 0.27;
 const ANIM_MS = 380;
+const NO_MARKS: TableMarks = { targets: new Set(), chosen: new Set() };
 
 interface CardObj {
   readonly mesh: THREE.Mesh;
   readonly outline: THREE.Mesh;
-  readonly defId: string;
+  /** `${defId}|${secret}`: when this changes, the face is replaced. */
+  look: string;
 }
 
 interface Tween {
@@ -52,11 +58,11 @@ interface Tween {
   readonly toScale: number;
   readonly start: number;
   readonly duration: number;
+  readonly arc: boolean;
   readonly onDone?: () => void;
 }
 
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-
 const tableYaw = (deg: number) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), (-deg * Math.PI) / 180);
 const HAND_QUAT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
 const HAND_BACK_QUAT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI).multiply(HAND_QUAT);
@@ -64,7 +70,7 @@ const HAND_BACK_QUAT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3
 export class TableScene {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(38, 1, 1, 600);
+  private readonly camera = new THREE.PerspectiveCamera(36, 1, 1, 800);
   private readonly handScene = new THREE.Scene();
   private readonly handCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 4000);
   private readonly raycaster = new THREE.Raycaster();
@@ -76,38 +82,43 @@ export class TableScene {
   private readonly backMaterial: THREE.MeshStandardMaterial;
   private readonly frontMaterials = new Map<string, THREE.MeshStandardMaterial>();
   private readonly outlineMaterials = {
-    hover: new THREE.MeshBasicMaterial({ color: '#ffd54a', transparent: true, opacity: 0.95, depthWrite: false }),
-    selected: new THREE.MeshBasicMaterial({ color: '#4fc3f7', transparent: true, opacity: 0.95, depthWrite: false }),
+    hover: this.outlineMat('#ffd54a'),
+    selected: this.outlineMat('#4fc3f7'),
+    target: this.outlineMat('#7cf29a'),
+    chosen: this.outlineMat('#4fc3f7'),
+    challenged: this.outlineMat('#ff6b6b'),
+    married: this.outlineMat('#e7c86e', 0.7),
   };
 
   private readonly tableCards = new Map<string, CardObj>();
   private readonly handCards = new Map<string, CardObj>();
   private handOrder: string[] = [];
   private readonly deck: THREE.Mesh;
-  private readonly deckOutline: THREE.Mesh;
-  private readonly ghost: THREE.Mesh;
-  private readonly ghostMaterial = new THREE.MeshBasicMaterial({ color: '#7cf29a', transparent: true, opacity: 0.45, depthWrite: false });
+  private readonly tableGroup = new THREE.Group();
+  private tableKey = '';
   private tweens: Tween[] = [];
   private transients: THREE.Object3D[] = [];
+  private readonly labels = new Map<string, HTMLElement>();
 
   private view: PlayerView | null = null;
+  private layout: TableLayout | null = null;
+  private laidById = new Map<string, LaidCard>();
+  private marks: TableMarks = NO_MARKS;
   private width = 1;
   private height = 1;
   private zoom = 1;
   private hoverHand: string | null = null;
   private hoverTable: string | null = null;
-  private hoverDeck = false;
   private selected: string | null = null;
-  private ghostRotation = 0;
   private inputEnabled = true;
   private pointerNdc: THREE.Vector2 | null = null;
   private downAt: { x: number; y: number } | null = null;
+  private handLeftInset = 24;
   private readonly resizeObserver: ResizeObserver;
 
   constructor(
     private readonly container: HTMLElement,
     private readonly callbacks: SceneCallbacks,
-    private readonly deckLabel?: HTMLElement,
   ) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -118,10 +129,8 @@ export class TableScene {
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.classList.add('table-canvas');
 
-    const backTex = this.texture(cardBackCanvas());
-    this.backMaterial = new THREE.MeshStandardMaterial({ map: backTex, roughness: 0.85 });
-
-    this.buildTable();
+    this.backMaterial = new THREE.MeshStandardMaterial({ map: this.texture(cardBackCanvas()), roughness: 0.85 });
+    this.scene.add(this.tableGroup);
     this.deck = new THREE.Mesh(new THREE.BoxGeometry(CARD_SIZE.width, 1, CARD_SIZE.height), [
       this.edgeMaterial,
       this.edgeMaterial,
@@ -131,33 +140,24 @@ export class TableScene {
       this.edgeMaterial,
     ]);
     this.deck.castShadow = true;
-    this.deck.position.copy(DECK_POS);
     this.scene.add(this.deck);
-    this.deckOutline = new THREE.Mesh(this.outlineGeometry, this.outlineMaterials.hover);
-    this.deckOutline.position.set(DECK_POS.x, 0.03, DECK_POS.z);
-    this.deckOutline.visible = false;
-    this.scene.add(this.deckOutline);
-
-    this.ghost = new THREE.Mesh(new THREE.PlaneGeometry(CARD_SIZE.width, CARD_SIZE.height).rotateX(-Math.PI / 2), this.ghostMaterial);
-    this.ghost.visible = false;
-    this.ghost.renderOrder = 10;
-    this.scene.add(this.ghost);
+    this.scene.background = new THREE.Color('#1d2128');
 
     this.scene.add(new THREE.HemisphereLight('#fff8ec', '#3a3a48', 1.6));
-    const sun = new THREE.DirectionalLight('#ffffff', 1.6);
-    sun.position.set(-25, 80, 40);
+    const sun = new THREE.DirectionalLight('#ffffff', 1.5);
+    sun.position.set(-25, 90, 40);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     const sc = sun.shadow.camera;
-    sc.left = -80;
-    sc.right = 80;
+    sc.left = -90;
+    sc.right = 90;
     sc.top = 60;
     sc.bottom = -60;
     sc.near = 10;
-    sc.far = 200;
+    sc.far = 220;
     sun.shadow.bias = -0.0005;
     this.scene.add(sun);
-    this.handCamera.position.set(0, 0, 2000); // hand cards sit at z ≈ 0–600, in front of the ray origin
+    this.handCamera.position.set(0, 0, 2000);
     this.handScene.add(new THREE.AmbientLight('#ffffff', 2.2));
     const handLight = new THREE.DirectionalLight('#ffffff', 1.0);
     handLight.position.set(0, 0, 1);
@@ -177,26 +177,38 @@ export class TableScene {
 
   // ---------------------------------------------------------------- public API
 
-  /** Shows a new view. Animates only when it plausibly follows the previous view for the same viewer. */
-  setView(view: PlayerView, options: { animate: boolean }): void {
+  /**
+   * Shows a new view, laid out with `anchor`'s family nearest. Animates only
+   * when it plausibly follows the previous view for the same viewer.
+   */
+  setView(view: PlayerView, options: { animate: boolean; anchor: Seat }): void {
     const prev = this.view;
-    const animate =
-      options.animate && prev !== null && prev.viewer === view.viewer && view.revision > prev.revision && view.table.length >= prev.table.length;
+    const animate = options.animate && prev !== null && prev.viewer === view.viewer && view.revision > prev.revision;
     this.view = view;
     if (!animate) this.finishTweens();
+    const layout = computeLayout(view, options.anchor);
+    this.layout = layout;
+    this.laidById = new Map(layout.cards.map((c) => [c.instanceId, c]));
+    const key = `${view.families.length}:${layout.anchor}`;
+    if (key !== this.tableKey) {
+      this.tableKey = key;
+      this.buildTable(layout);
+      this.fitCamera();
+    }
 
     // Table cards
-    const seen = new Set<string>();
-    for (const card of view.table) {
-      seen.add(card.instanceId);
-      const existing = this.tableCards.get(card.instanceId);
+    for (const card of layout.cards) {
       const target = this.tableTransform(card);
+      const look = `${card.defId}|${card.secret}`;
+      const existing = this.tableCards.get(card.instanceId);
       if (existing) {
-        existing.mesh.position.copy(target.pos);
-        existing.mesh.quaternion.copy(target.quat);
+        if (existing.look !== look) this.setFace(existing, card.defId, card.secret);
+        const moved = existing.mesh.position.distanceTo(target.pos) > 0.01 || existing.mesh.quaternion.angleTo(target.quat) > 0.01;
+        if (moved && animate) this.tween(existing.mesh, existing.mesh.position.clone(), target.pos, existing.mesh.quaternion.clone(), target.quat, 1, 1);
+        else if (moved) this.place(existing.mesh, target);
         continue;
       }
-      const obj = this.makeCard(card.faceUp ? card.defId : null, true);
+      const obj = this.makeCard(card.defId, card.secret, true);
       this.tableCards.set(card.instanceId, obj);
       this.scene.add(obj.mesh);
       const fromHand = this.handCards.get(card.instanceId);
@@ -204,32 +216,34 @@ export class TableScene {
         const start = this.handToWorld(fromHand.mesh.position, fromHand.mesh.scale.x);
         this.tween(obj.mesh, start.pos, target.pos, start.quat, target.quat, 1, 1);
       } else if (animate) {
-        const from = target.pos.clone().add(new THREE.Vector3(0, 14, -6));
-        this.tween(obj.mesh, from, target.pos, target.quat, target.quat, 1.1, 1);
-      } else {
-        obj.mesh.position.copy(target.pos);
-        obj.mesh.quaternion.copy(target.quat);
-      }
+        this.tween(obj.mesh, target.pos.clone().add(new THREE.Vector3(0, 14, -4)), target.pos, target.quat, target.quat, 1.1, 1);
+      } else this.place(obj.mesh, target);
     }
     for (const [id, obj] of this.tableCards) {
-      if (!seen.has(id)) {
+      if (!this.laidById.has(id)) {
+        this.cancelTweens(obj.mesh);
         this.scene.remove(obj.mesh);
         this.tableCards.delete(id);
       }
     }
 
-    // Hand cards
+    // Hand cards (the viewer always knows its own cards, but refresh faces anyway).
     const handIds = view.hand.map((c) => c.instanceId);
     const drewOwn = animate && prev !== null && view.drawPileCount < prev.drawPileCount;
     for (const c of view.hand) {
-      if (this.handCards.has(c.instanceId)) continue;
-      const obj = this.makeCard(c.defId, false);
+      const existing = this.handCards.get(c.instanceId);
+      if (existing) {
+        if (existing.look !== `${c.defId}|false`) this.setFace(existing, c.defId, false);
+        continue;
+      }
+      const obj = this.makeCard(c.defId, false, false);
       this.handCards.set(c.instanceId, obj);
       this.handScene.add(obj.mesh);
       obj.mesh.userData.fresh = drewOwn;
     }
     for (const [id, obj] of this.handCards) {
       if (!handIds.includes(id)) {
+        this.cancelTweens(obj.mesh);
         this.handScene.remove(obj.mesh);
         this.handCards.delete(id);
       }
@@ -239,13 +253,34 @@ export class TableScene {
     if (this.hoverHand && !handIds.includes(this.hoverHand)) this.hoverHand = null;
     if (this.hoverTable && !this.tableCards.has(this.hoverTable)) this.hoverTable = null;
 
-    // Opponent draw: a card back flies from the deck to the far side.
-    if (animate && prev && view.drawPileCount < prev.drawPileCount && !this.anyFresh()) {
-      this.animateOpponentDraw();
+    // Opponent draws: card backs fly from the deck towards that family's nameplate.
+    if (animate && prev) {
+      for (const f of view.families) {
+        const before = prev.families[f.seat]?.handCount ?? f.handCount;
+        if (f.seat !== view.viewer && f.handCount > before && view.drawPileCount < prev.drawPileCount) this.animateOpponentDraw(f.seat);
+      }
     }
     this.layoutHand(animate);
     this.updateDeck(view.drawPileCount);
     this.updateHighlights();
+  }
+
+  /** Target/selection emphasis for table cards. */
+  setMarks(marks: TableMarks | null): void {
+    this.marks = marks ?? NO_MARKS;
+    this.updateHighlights();
+  }
+
+  /** Registers an HTML element positioned over a logical point each frame: 'deck', 'discard' or `band:<seat>`. */
+  setLabel(key: string, el: HTMLElement | null): void {
+    if (el) this.labels.set(key, el);
+    else this.labels.delete(key);
+  }
+
+  /** Space reserved on the left of the hand area (for the log panel), in CSS px. */
+  setHandLeftInset(px: number): void {
+    this.handLeftInset = px;
+    this.layoutHand(false);
   }
 
   /** Hides everything private and stops all animations immediately (hotseat handoff). */
@@ -254,10 +289,10 @@ export class TableScene {
     this.selected = null;
     this.hoverHand = null;
     this.hoverTable = null;
-    this.hoverDeck = false;
-    this.ghost.visible = false;
+    this.marks = NO_MARKS;
     this.pointerNdc = null;
     this.downAt = null;
+    this.layoutHand(false);
     this.updateHighlights();
   }
 
@@ -265,12 +300,6 @@ export class TableScene {
     this.selected = instanceId;
     this.layoutHand(true);
     this.updateHighlights();
-    this.refreshPointer();
-  }
-
-  setGhostRotation(deg: number): void {
-    this.ghostRotation = deg;
-    this.refreshPointer();
   }
 
   setInputEnabled(enabled: boolean): void {
@@ -279,8 +308,6 @@ export class TableScene {
     if (!enabled) {
       this.hoverHand = null;
       this.hoverTable = null;
-      this.hoverDeck = false;
-      this.ghost.visible = false;
       this.downAt = null;
       this.layoutHand(false);
       this.updateHighlights();
@@ -288,28 +315,25 @@ export class TableScene {
     }
   }
 
-  /** Highlights a table card chosen from the inspector's stack list. */
+  /** Highlights a table card chosen from an HTML list (hover feedback). */
   setTableHighlight(instanceId: string | null): void {
     this.hoverTable = instanceId;
     this.updateHighlights();
   }
 
-  /** Screen positions (CSS px) of interactive objects, for automated browser checks (`?e2e`). */
-  debugScreenInfo(): { hand: { id: string; x: number; y: number }[]; table: { id: string; x: number; y: number }[]; deck: { x: number; y: number }; tweens: number } {
-    const toCss = (ndc: THREE.Vector3) => ({ x: ((ndc.x + 1) / 2) * this.width, y: ((1 - ndc.y) / 2) * this.height });
+  /** Screen positions (CSS px) and visible identities, for automated browser checks (`?e2e`). Never more than the view shows. */
+  debugScreenInfo() {
+    const toCss = (v: THREE.Vector3) => {
+      const p = v.clone().project(this.camera);
+      return { x: ((p.x + 1) / 2) * this.width, y: ((1 - p.y) / 2) * this.height };
+    };
     const hand = this.handOrder.map((id, i) => {
       const slot = this.handSlot(i, this.handOrder.length);
-      return { id, x: slot.x + this.width / 2, y: this.height / 2 - slot.y };
+      return { id, defId: this.view?.hand.find((c) => c.instanceId === id)?.defId ?? '', x: slot.x + this.width / 2, y: this.height / 2 - slot.y };
     });
-    const table = (this.view?.table ?? []).map((c) => ({ id: c.instanceId, ...toCss(new THREE.Vector3(c.x, 0, -c.y).project(this.camera)) }));
-    const deck = toCss(new THREE.Vector3(DECK_POS.x, this.deck.position.y * 2, DECK_POS.z).project(this.camera));
-    return { hand, table, deck, tweens: this.tweens.length };
-  }
-
-  /** Converts a logical table point to CSS pixels (for automated browser checks). */
-  debugTablePointToScreen(x: number, y: number): { x: number; y: number } {
-    const p = new THREE.Vector3(x, 0, -y).project(this.camera);
-    return { x: ((p.x + 1) / 2) * this.width, y: ((1 - p.y) / 2) * this.height };
+    const table = (this.layout?.cards ?? []).map((c) => ({ id: c.instanceId, defId: c.defId, zone: c.zone, owner: c.owner, ...toCss(new THREE.Vector3(c.x, 0, -c.y)) }));
+    const d = this.layout?.deck ?? { x: 0, y: 0 };
+    return { hand, table, deck: toCss(new THREE.Vector3(d.x, 0, -d.y)), tweens: this.tweens.length, anchor: this.layout?.anchor ?? null };
   }
 
   dispose(): void {
@@ -331,6 +355,10 @@ export class TableScene {
 
   // ---------------------------------------------------------------- building
 
+  private outlineMat(color: string, opacity = 0.95): THREE.MeshBasicMaterial {
+    return new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
+  }
+
   private texture(canvas: HTMLCanvasElement): THREE.CanvasTexture {
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -338,20 +366,22 @@ export class TableScene {
     return tex;
   }
 
-  private frontMaterial(defId: string): THREE.MeshStandardMaterial {
-    let m = this.frontMaterials.get(defId);
+  /** Face material for a known definition; concealed cards always share the back. */
+  private faceMaterial(defId: string, secret: boolean): THREE.MeshStandardMaterial {
+    if (defId === HIDDEN) return this.backMaterial;
+    const key = `${defId}|${secret}`;
+    let m = this.frontMaterials.get(key);
     if (!m) {
-      m = new THREE.MeshStandardMaterial({ map: this.texture(cardFrontCanvas(defId)), roughness: 0.85 });
-      this.frontMaterials.set(defId, m);
+      m = new THREE.MeshStandardMaterial({ map: this.texture(cardFrontCanvas(defId, secret)), roughness: 0.85 });
+      this.frontMaterials.set(key, m);
     }
     return m;
   }
 
   /** Box faces: +x, -x, +y (front), -y (back), +z, -z. */
-  private makeCard(defId: string | null, onTable: boolean): CardObj {
-    const front = defId && defId !== 'hidden' ? this.frontMaterial(defId) : this.backMaterial;
+  private makeCard(defId: string, secret: boolean, onTable: boolean): CardObj {
     const e = this.edgeMaterial;
-    const mesh = new THREE.Mesh(this.cardGeometry, [e, e, front, this.backMaterial, e, e]);
+    const mesh = new THREE.Mesh(this.cardGeometry, [e, e, this.faceMaterial(defId, secret), this.backMaterial, e, e]);
     mesh.castShadow = onTable;
     mesh.receiveShadow = onTable;
     const outline = new THREE.Mesh(this.outlineGeometry, this.outlineMaterials.hover);
@@ -359,49 +389,97 @@ export class TableScene {
     outline.visible = false;
     outline.renderOrder = -1;
     mesh.add(outline);
-    return { mesh, outline, defId: defId ?? 'hidden' };
+    return { mesh, outline, look: `${defId}|${secret}` };
   }
 
-  private buildTable(): void {
-    const b = TABLE_BOUNDS;
+  private setFace(obj: CardObj, defId: string, secret: boolean): void {
+    (obj.mesh.material as THREE.Material[])[2] = this.faceMaterial(defId, secret);
+    obj.look = `${defId}|${secret}`;
+  }
+
+  private place(mesh: THREE.Object3D, t: { pos: THREE.Vector3; quat: THREE.Quaternion }): void {
+    this.cancelTweens(mesh);
+    mesh.position.copy(t.pos);
+    mesh.quaternion.copy(t.quat);
+    mesh.scale.setScalar(1);
+  }
+
+  private labelTexture(text: string): THREE.CanvasTexture {
+    const c = document.createElement('canvas');
+    c.width = 512;
+    c.height = 64;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = 'rgba(220, 236, 226, 0.55)';
+    ctx.font = '700 40px system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 6, 34);
+    return this.texture(c);
+  }
+
+  /** Felt, per-family bands with zone mats, and the pile column. Rebuilt when the seating changes. */
+  private buildTable(layout: TableLayout): void {
+    for (const child of [...this.tableGroup.children]) {
+      this.tableGroup.remove(child);
+      child.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.geometry.dispose();
+      });
+    }
+    const b = layout.bounds;
     const w = b.maxX - b.minX;
     const h = b.maxY - b.minY;
-    const wood = new THREE.Mesh(
-      new THREE.BoxGeometry(w + 30, 2, h + 12),
-      new THREE.MeshStandardMaterial({ color: '#5a4030', roughness: 0.8 }),
-    );
-    wood.position.set(-5, -1.02, 0);
+    const cx = (b.minX + b.maxX) / 2;
+    const cy = (b.minY + b.maxY) / 2;
+    const wood = new THREE.Mesh(new THREE.BoxGeometry(w + 8, 2, h + 8), new THREE.MeshStandardMaterial({ color: '#5a4030', roughness: 0.8 }));
+    wood.position.set(cx, -1.02, -cy);
     wood.receiveShadow = true;
-    this.scene.add(wood);
-
-    const felt = new THREE.Mesh(new THREE.PlaneGeometry(w, h).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: '#2f5b4b', roughness: 1 }));
-    felt.position.set((b.minX + b.maxX) / 2, 0.001, -(b.minY + b.maxY) / 2);
+    this.tableGroup.add(wood);
+    const felt = new THREE.Mesh(new THREE.PlaneGeometry(w + 2, h + 2).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: '#2f5b4b', roughness: 1 }));
+    felt.position.set(cx, 0.001, -cy);
     felt.receiveShadow = true;
-    this.scene.add(felt);
+    this.tableGroup.add(felt);
 
-    // Faint 8-unit grid and a crisp border so the bounded area is obvious.
-    const grid: number[] = [];
-    for (let x = b.minX + 8; x < b.maxX; x += 8) grid.push(x, 0.01, -b.minY, x, 0.01, -b.maxY);
-    for (let y = b.minY + 8; y < b.maxY - 1; y += 8) grid.push(b.minX, 0.01, -y, b.maxX, 0.01, -y);
-    const gridGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(grid, 3));
-    this.scene.add(new THREE.LineSegments(gridGeo, new THREE.LineBasicMaterial({ color: '#4a7d69', transparent: true, opacity: 0.5 })));
-    const border = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(b.minX, 0.012, -b.minY),
-      new THREE.Vector3(b.maxX, 0.012, -b.minY),
-      new THREE.Vector3(b.maxX, 0.012, -b.maxY),
-      new THREE.Vector3(b.minX, 0.012, -b.maxY),
-    ]);
-    this.scene.add(new THREE.LineLoop(border, new THREE.LineBasicMaterial({ color: '#cfe8d8' })));
-
-    // Draw pile mat
-    const mat = new THREE.Mesh(
-      new THREE.PlaneGeometry(CARD_SIZE.width + 2, CARD_SIZE.height + 2).rotateX(-Math.PI / 2),
-      new THREE.MeshStandardMaterial({ color: '#3b2b20', roughness: 1 }),
-    );
-    mat.position.set(DECK_POS.x, 0.005, DECK_POS.z);
-    mat.receiveShadow = true;
-    this.scene.add(mat);
-    this.scene.background = new THREE.Color('#1d2128');
+    const matMaterial = new THREE.MeshStandardMaterial({ color: '#376a57', roughness: 1 });
+    const labelMats = new Map<string, THREE.MeshBasicMaterial>();
+    const labelMat = (text: string) => {
+      let m = labelMats.get(text);
+      if (!m) {
+        m = new THREE.MeshBasicMaterial({ map: this.labelTexture(text), transparent: true, depthWrite: false });
+        labelMats.set(text, m);
+      }
+      return m;
+    };
+    for (const band of layout.bands) {
+      const stripe = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.8, band.maxY - band.minY).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color: SEAT_COLORS[band.seat % SEAT_COLORS.length] }),
+      );
+      stripe.position.set(ZONES.plate.minX + 0.6, 0.004, -band.centerY);
+      this.tableGroup.add(stripe);
+      for (const [zone, text] of [
+        [ZONES.children, 'CHILDREN'],
+        [ZONES.characters, 'CHARACTERS'],
+        [ZONES.schemes, 'SCHEMES'],
+      ] as const) {
+        const zw = zone.maxX - zone.minX + 1;
+        const mat = new THREE.Mesh(new THREE.PlaneGeometry(zw, band.maxY - band.minY - 0.2).rotateX(-Math.PI / 2), matMaterial);
+        mat.position.set((zone.minX + zone.maxX) / 2, 0.003, -band.centerY);
+        mat.receiveShadow = true;
+        this.tableGroup.add(mat);
+        // Vertical zone label along the mat's left edge.
+        const label = new THREE.Mesh(new THREE.PlaneGeometry(8, 1).rotateX(-Math.PI / 2), labelMat(text));
+        label.rotation.y = Math.PI / 2;
+        label.position.set(zone.minX - 0.05, 0.006, -(band.minY + 4.1));
+        this.tableGroup.add(label);
+      }
+    }
+    const pileMat = new THREE.MeshStandardMaterial({ color: '#3b2b20', roughness: 1 });
+    for (const p of [layout.deck, layout.discard]) {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(CARD_SIZE.width + 1.6, CARD_SIZE.height + 1.6).rotateX(-Math.PI / 2), pileMat);
+      m.position.set(p.x, 0.005, -p.y);
+      m.receiveShadow = true;
+      this.tableGroup.add(m);
+    }
+    this.deck.position.set(layout.deck.x, 0, -layout.deck.y);
   }
 
   private updateDeck(count: number): void {
@@ -409,38 +487,37 @@ export class TableScene {
     this.deck.visible = count > 0;
     this.deck.scale.y = Math.max(height, 0.001);
     this.deck.position.y = height / 2;
-    this.deckOutline.position.y = 0.02;
   }
 
   // ---------------------------------------------------------------- layout
 
-  private tableTransform(card: ViewTableCard): { pos: THREE.Vector3; quat: THREE.Quaternion } {
+  private tableTransform(card: LaidCard): { pos: THREE.Vector3; quat: THREE.Quaternion } {
+    const lift = card.challenged ? 0.8 : 0;
     return {
-      pos: new THREE.Vector3(card.x, 0.06 + card.order * STACK_STEP + CARD_T / 2, -card.y),
+      pos: new THREE.Vector3(card.x, 0.06 + card.elevation * STACK_STEP + CARD_T / 2 + lift, -card.y),
       quat: tableYaw(card.rotation),
     };
   }
 
   private handMetrics() {
-    const cardH = Math.max(110, Math.min(230, this.height * 0.21));
+    const cardH = Math.max(110, Math.min(220, this.height * 0.2));
     const scale = cardH / CARD_SIZE.height;
     const cardW = CARD_SIZE.width * scale;
-    const left = -this.width / 2 + 24;
-    const right = this.width / 2 - Math.min(320, this.width * 0.28);
-    const baseY = -this.height / 2 + cardH / 2 + 16;
+    const left = -this.width / 2 + this.handLeftInset;
+    const right = this.width / 2 - Math.min(330, this.width * 0.3);
+    const baseY = -this.height / 2 + cardH / 2 + 14;
     return { cardH, cardW, scale, left, right, baseY };
   }
 
   private handSlot(index: number, count: number) {
     const m = this.handMetrics();
     const avail = Math.max(m.cardW, m.right - m.left);
-    const spacing = count > 1 ? Math.min(m.cardW + 14, (avail - m.cardW) / (count - 1)) : 0;
+    const spacing = count > 1 ? Math.min(m.cardW + 12, (avail - m.cardW) / (count - 1)) : 0;
     const total = m.cardW + spacing * (count - 1);
     const startX = m.left + (avail - total) / 2 + m.cardW / 2;
     return { x: startX + spacing * index, y: m.baseY, z: index * 2, scale: m.scale, m };
   }
 
-  /** Target placement of a hand card (pixels in the hand layer), including hover/selection lift. */
   private handTarget(id: string, index: number, count: number) {
     const slot = this.handSlot(index, count);
     let y = slot.y;
@@ -463,20 +540,20 @@ export class TableScene {
       const obj = this.handCards.get(id);
       if (!obj) return;
       const t = this.handTarget(id, i, n);
-      const scale = t.scale;
       const target = new THREE.Vector3(t.x, t.y, t.z);
-      if (obj.mesh.userData.fresh && animate) {
+      if (obj.mesh.userData.fresh && animate && this.layout) {
         obj.mesh.userData.fresh = false;
-        const deckPx = this.worldToHand(new THREE.Vector3(DECK_POS.x, this.deck.position.y * 2, DECK_POS.z));
-        this.tween(obj.mesh, deckPx, target, HAND_BACK_QUAT, HAND_QUAT, scale * 0.35, scale, ANIM_MS * 1.3);
+        const d = this.layout.deck;
+        const deckPx = this.worldToHand(new THREE.Vector3(d.x, this.deck.position.y * 2, -d.y));
+        this.tween(obj.mesh, deckPx, target, HAND_BACK_QUAT, HAND_QUAT, t.scale * 0.35, t.scale, ANIM_MS * 1.3);
       } else if (animate && obj.mesh.userData.placed) {
-        this.tween(obj.mesh, obj.mesh.position.clone(), target, obj.mesh.quaternion.clone(), HAND_QUAT, obj.mesh.scale.x, scale, 140);
+        this.tween(obj.mesh, obj.mesh.position.clone(), target, obj.mesh.quaternion.clone(), HAND_QUAT, obj.mesh.scale.x, t.scale, 140);
       } else {
         obj.mesh.userData.fresh = false;
         this.cancelTweens(obj.mesh);
         obj.mesh.position.copy(target);
         obj.mesh.quaternion.copy(HAND_QUAT);
-        obj.mesh.scale.setScalar(scale);
+        obj.mesh.scale.setScalar(t.scale);
       }
       obj.mesh.userData.placed = true;
     });
@@ -487,29 +564,35 @@ export class TableScene {
       obj.outline.visible = id === this.selected || (id === this.hoverHand && this.inputEnabled);
       obj.outline.material = id === this.selected ? this.outlineMaterials.selected : this.outlineMaterials.hover;
     }
-    for (const [id, obj] of this.tableCards) obj.outline.visible = id === this.hoverTable;
-    this.deckOutline.visible = this.hoverDeck && this.inputEnabled && (this.view?.drawPileCount ?? 0) > 0;
+    const m = this.outlineMaterials;
+    for (const [id, obj] of this.tableCards) {
+      const laid = this.laidById.get(id);
+      const material = this.marks.chosen.has(id)
+        ? m.chosen
+        : id === this.hoverTable
+          ? m.hover
+          : this.marks.targets.has(id)
+            ? m.target
+            : laid?.challenged
+              ? m.challenged
+              : laid?.married
+                ? m.married
+                : null;
+      obj.outline.visible = material !== null;
+      if (material) obj.outline.material = material;
+    }
   }
 
-  private anyFresh(): boolean {
-    for (const obj of this.handCards.values()) if (obj.mesh.userData.fresh) return true;
-    return false;
-  }
-
-  private animateOpponentDraw(): void {
-    const mesh = new THREE.Mesh(this.cardGeometry, [
-      this.edgeMaterial,
-      this.edgeMaterial,
-      this.backMaterial,
-      this.edgeMaterial,
-      this.edgeMaterial,
-      this.edgeMaterial,
-    ]);
+  private animateOpponentDraw(seat: Seat): void {
+    const band = this.layout?.bands.find((b) => b.seat === seat);
+    const d = this.layout?.deck;
+    if (!band || !d) return;
+    const mesh = new THREE.Mesh(this.cardGeometry, [this.edgeMaterial, this.edgeMaterial, this.backMaterial, this.edgeMaterial, this.edgeMaterial, this.edgeMaterial]);
     this.scene.add(mesh);
     this.transients.push(mesh);
-    const from = new THREE.Vector3(DECK_POS.x, this.deck.position.y * 2 + 0.5, DECK_POS.z);
-    const to = new THREE.Vector3(DECK_POS.x + 20, 8, -TABLE_BOUNDS.maxY - 25);
-    this.tween(mesh, from, to, new THREE.Quaternion(), tableYaw(25), 1, 0.6, ANIM_MS * 1.4, () => {
+    const from = new THREE.Vector3(d.x, this.deck.position.y * 2 + 0.5, -d.y);
+    const to = new THREE.Vector3((ZONES.plate.minX + ZONES.plate.maxX) / 2, 4, -band.centerY);
+    this.tween(mesh, from, to, new THREE.Quaternion(), tableYaw(20), 1, 0.5, ANIM_MS * 1.6, () => {
       this.scene.remove(mesh);
       this.transients = this.transients.filter((t) => t !== mesh);
     });
@@ -535,20 +618,19 @@ export class TableScene {
     this.layoutHand(false);
   }
 
-  /** Places the fixed tabletop camera so the table (and deck) fit in the band above the hand area. */
+  /** Places the fixed tabletop camera so the whole table fits in the band above the hand area. */
   private fitCamera(): void {
-    const b = TABLE_BOUNDS;
+    const b = this.layout?.bounds ?? { minX: -62, maxX: 58, minY: -14, maxY: 14 };
     const corners = [
-      new THREE.Vector3(DECK_POS.x - CARD_SIZE.width / 2 - 1, 0, -b.minY + 1),
-      new THREE.Vector3(b.maxX + 1, 0, -b.minY + 1),
-      new THREE.Vector3(DECK_POS.x - CARD_SIZE.width / 2 - 1, 0, -b.maxY - 1),
-      new THREE.Vector3(b.maxX + 1, 0, -b.maxY - 1),
+      new THREE.Vector3(b.minX, 0, -b.minY),
+      new THREE.Vector3(b.maxX, 0, -b.minY),
+      new THREE.Vector3(b.minX, 0, -b.maxY),
+      new THREE.Vector3(b.maxX, 0, -b.maxY),
     ];
-    const dir = new THREE.Vector3(0, 1.3, 0.9).normalize(); // camera ~55° above the table, on the near side
-    const lookAt = new THREE.Vector3((DECK_POS.x - CARD_SIZE.width / 2 + b.maxX) / 2, 0, 0);
+    const dir = new THREE.Vector3(0, 1.6, 0.75).normalize(); // ~65° above the table, from the near side
+    const lookAt = new THREE.Vector3((b.minX + b.maxX) / 2, 0, -(b.minY + b.maxY) / 2);
     const bottom = -1 + HAND_FRACTION * 2;
-    const top = 1 - (52 / this.height) * 2; // keep clear of the top bar
-    // Shift the projected image up so the table centres in [bottom, top].
+    const top = 1 - (56 / this.height) * 2;
     const shiftPx = ((top + bottom) / 2) * (this.height / 2);
     this.camera.setViewOffset(this.width, this.height, 0, shiftPx, this.width, this.height);
     const place = (d: number) => {
@@ -560,10 +642,10 @@ export class TableScene {
     const fits = () =>
       corners.every((c) => {
         const p = c.clone().project(this.camera);
-        return Math.abs(p.x) <= 0.97 && p.y >= bottom && p.y <= top;
+        return Math.abs(p.x) <= 0.985 && p.y >= bottom && p.y <= top;
       });
     let d = 40;
-    for (; d < 400; d += 2) {
+    for (; d < 600; d += 2) {
       place(d);
       if (fits()) break;
     }
@@ -575,7 +657,6 @@ export class TableScene {
     return new THREE.Vector3((p.x * this.width) / 2, (p.y * this.height) / 2, 300);
   }
 
-  /** A point in front of the table camera matching a hand-layer card's on-screen position and size. */
   private handToWorld(handPos: THREE.Vector3, handScale: number): { pos: THREE.Vector3; quat: THREE.Quaternion } {
     const ndc = new THREE.Vector3((handPos.x / this.width) * 2, (handPos.y / this.height) * 2, 0.5);
     const pxH = CARD_SIZE.height * handScale;
@@ -583,9 +664,25 @@ export class TableScene {
     const dist = CARD_SIZE.height / (2 * Math.tan(fov / 2) * (pxH / this.height));
     const ray = ndc.unproject(this.camera).sub(this.camera.position).normalize();
     const pos = this.camera.position.clone().addScaledVector(ray, dist);
-    // Face the camera: card +y towards camera, card "top" towards screen up.
     const quat = this.camera.quaternion.clone().multiply(HAND_QUAT);
     return { pos, quat };
+  }
+
+  private projectLabels(): void {
+    const layout = this.layout;
+    if (!layout) return;
+    const put = (el: HTMLElement, x: number, y: number) => {
+      const p = new THREE.Vector3(x, 0, -y).project(this.camera);
+      el.style.transform = `translate(${((p.x + 1) / 2) * this.width}px, ${((1 - p.y) / 2) * this.height}px) translate(-50%, -50%)`;
+    };
+    for (const [key, el] of this.labels) {
+      if (key === 'deck') put(el, layout.deck.x, layout.deck.y - CARD_SIZE.height / 2 - 1.6);
+      else if (key === 'discard') put(el, layout.discard.x, layout.discard.y - CARD_SIZE.height / 2 - 1.6);
+      else if (key.startsWith('band:')) {
+        const band = layout.bands.find((b) => b.seat === Number(key.slice(5)));
+        if (band) put(el, (ZONES.plate.minX + ZONES.plate.maxX) / 2 + 0.5, band.centerY);
+      }
+    }
   }
 
   // ---------------------------------------------------------------- pointer input
@@ -610,87 +707,48 @@ export class TableScene {
     return (best as { id: string } | null)?.id ?? null;
   }
 
-  private pickTable(ndc: THREE.Vector2): { info: TablePointer; deck: boolean } {
+  /** Topmost laid-out table card under the pointer (logical geometry). */
+  private pickTable(ndc: THREE.Vector2): string | null {
+    if (!this.layout) return null;
     this.raycaster.setFromCamera(ndc, this.camera);
-    const deckHit = this.deck.visible && this.raycaster.intersectObject(this.deck, false).length > 0;
-    const point3 = new THREE.Vector3();
-    const onPlane = this.raycaster.ray.intersectPlane(this.tablePlane, point3);
-    const under: { id: string; order: number }[] = [];
-    if (this.view) {
-      // Use logical geometry (not mesh positions mid-animation) to decide what's under the pointer.
-      if (onPlane) {
-        for (const c of this.view.table) {
-          const rad = (c.rotation * Math.PI) / 180;
-          const dx = point3.x - c.x;
-          const dy = -point3.z - c.y;
-          // rotate into card space (rotation is clockwise seen from above)
-          const lx = dx * Math.cos(rad) - dy * Math.sin(rad);
-          const ly = dx * Math.sin(rad) + dy * Math.cos(rad);
-          if (Math.abs(lx) <= CARD_SIZE.width / 2 && Math.abs(ly) <= CARD_SIZE.height / 2) under.push({ id: c.instanceId, order: c.order });
-        }
-      }
+    const p = new THREE.Vector3();
+    if (!this.raycaster.ray.intersectPlane(this.tablePlane, p)) return null;
+    let best: LaidCard | null = null;
+    for (const c of this.layout.cards) {
+      const rad = (c.rotation * Math.PI) / 180;
+      const dx = p.x - c.x;
+      const dy = -p.z - c.y;
+      const lx = dx * Math.cos(rad) - dy * Math.sin(rad);
+      const ly = dx * Math.sin(rad) + dy * Math.cos(rad);
+      if (Math.abs(lx) <= CARD_SIZE.width / 2 && Math.abs(ly) <= CARD_SIZE.height / 2 && (!best || c.elevation >= best.elevation)) best = c;
     }
-    under.sort((a, b) => b.order - a.order);
-    const point = onPlane && Math.abs(point3.x) < 70 && Math.abs(point3.z) < 45 ? { x: point3.x, y: -point3.z } : null;
-    return { info: { point, cardsUnder: under.map((u) => u.id) }, deck: deckHit };
-  }
-
-  private refreshPointer(): void {
-    if (this.pointerNdc) this.handlePointer(this.pointerNdc, false);
-    else this.ghost.visible = false;
+    return best?.instanceId ?? null;
   }
 
   private handlePointer(ndc: THREE.Vector2, click: boolean): void {
     if (!this.inputEnabled) return;
     const handId = this.pickHand(ndc);
     if (handId) {
-      this.setHover(handId, null, false);
-      this.ghost.visible = false;
+      this.setHover(handId, null);
       this.renderer.domElement.style.cursor = 'pointer';
       if (click) this.callbacks.onHandClick(handId);
       return;
     }
-    const { info, deck } = this.pickTable(ndc);
-    if (deck && !this.selected) {
-      this.setHover(null, null, true);
-      this.ghost.visible = false;
-      this.renderer.domElement.style.cursor = 'pointer';
-      if (click) this.callbacks.onDeckClick();
-      return;
-    }
-    this.setHover(null, this.selected ? null : (info.cardsUnder[0] ?? null), false);
-    this.updateGhost(info);
-    this.renderer.domElement.style.cursor = this.selected && info.point ? 'crosshair' : info.cardsUnder.length ? 'zoom-in' : 'default';
-    this.callbacks.onTableHover(info);
-    if (click) this.callbacks.onTableClick(info);
+    const tableId = this.pickTable(ndc);
+    this.setHover(null, tableId);
+    this.renderer.domElement.style.cursor = tableId ? (this.marks.targets.has(tableId) ? 'crosshair' : 'zoom-in') : 'default';
+    this.callbacks.onTableHover(tableId);
+    if (click) this.callbacks.onTableClick(tableId);
   }
 
-  private setHover(hand: string | null, table: string | null, deck: boolean): void {
-    const handChanged = hand !== this.hoverHand;
-    if (handChanged) {
+  private setHover(hand: string | null, table: string | null): void {
+    if (hand !== this.hoverHand) {
       this.hoverHand = hand;
       this.layoutHand(true);
       this.callbacks.onHandHover(hand);
     }
-    if (deck !== this.hoverDeck) {
-      this.hoverDeck = deck;
-      this.callbacks.onDeckHover(deck);
-    }
     this.hoverTable = table;
     this.updateHighlights();
-  }
-
-  private updateGhost(info: TablePointer): void {
-    if (!this.selected || !info.point) {
-      this.ghost.visible = false;
-      return;
-    }
-    const inside = isInsideTable(info.point.x, info.point.y);
-    const p = resolvePlacement({ x: info.point.x, y: info.point.y, rotation: this.ghostRotation });
-    this.ghost.visible = true;
-    this.ghost.position.set(p.x, 0.05 + ((this.view?.table.length ?? 0) + 1) * STACK_STEP + CARD_T + 0.02, -p.y);
-    this.ghost.quaternion.copy(tableYaw(p.rotation));
-    this.ghostMaterial.color.set(inside ? '#7cf29a' : '#ff7a7a');
   }
 
   private readonly onPointerMove = (e: PointerEvent) => {
@@ -714,16 +772,14 @@ export class TableScene {
 
   private readonly onPointerLeave = () => {
     this.pointerNdc = null;
-    this.ghost.visible = false;
-    this.setHover(null, null, false);
-    this.callbacks.onTableHover({ point: null, cardsUnder: [] });
+    this.setHover(null, null);
+    this.callbacks.onTableHover(null);
   };
 
   private readonly onWheel = (e: WheelEvent) => {
     e.preventDefault();
-    this.zoom = Math.min(1.6, Math.max(0.8, this.zoom * (e.deltaY > 0 ? 0.94 : 1.06)));
+    this.zoom = Math.min(1.8, Math.max(0.85, this.zoom * (e.deltaY > 0 ? 0.94 : 1.06)));
     this.fitCamera();
-    this.refreshPointer();
   };
 
   // ---------------------------------------------------------------- animation
@@ -743,7 +799,18 @@ export class TableScene {
     obj.position.copy(fromPos);
     obj.quaternion.copy(fromQuat);
     obj.scale.setScalar(fromScale);
-    const t: Tween = { obj, fromPos: fromPos.clone(), toPos: toPos.clone(), fromQuat: fromQuat.clone(), toQuat: toQuat.clone(), fromScale, toScale, start: performance.now(), duration };
+    const t: Tween = {
+      obj,
+      fromPos: fromPos.clone(),
+      toPos: toPos.clone(),
+      fromQuat: fromQuat.clone(),
+      toQuat: toQuat.clone(),
+      fromScale,
+      toScale,
+      start: performance.now(),
+      duration,
+      arc: obj.parent === this.scene && fromPos.distanceTo(toPos) > 1,
+    };
     this.tweens.push(onDone ? { ...t, onDone } : t);
   }
 
@@ -772,7 +839,7 @@ export class TableScene {
         const k = Math.min(1, (now - t.start) / t.duration);
         const e = easeInOut(k);
         t.obj.position.lerpVectors(t.fromPos, t.toPos, e);
-        if (t.fromPos.distanceTo(t.toPos) > 1 && t.obj.parent === this.scene) t.obj.position.y += Math.sin(e * Math.PI) * 3; // small arc
+        if (t.arc) t.obj.position.y += Math.sin(e * Math.PI) * 3;
         t.obj.quaternion.slerpQuaternions(t.fromQuat, t.toQuat, e);
         t.obj.scale.setScalar(t.fromScale + (t.toScale - t.fromScale) * e);
         if (k >= 1) done.push(t);
@@ -782,10 +849,7 @@ export class TableScene {
         for (const t of done) t.onDone?.();
       }
     }
-    if (this.deckLabel) {
-      const p = new THREE.Vector3(DECK_POS.x, 0, DECK_POS.z + CARD_SIZE.height / 2 + 1.5).project(this.camera);
-      this.deckLabel.style.transform = `translate(${((p.x + 1) / 2) * this.width}px, ${((1 - p.y) / 2) * this.height}px) translate(-50%, 0)`;
-    }
+    this.projectLabels();
     this.renderer.setViewport(0, 0, this.width, this.height);
     this.renderer.clear();
     this.renderer.render(this.scene, this.camera);

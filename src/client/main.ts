@@ -30,8 +30,8 @@ function showMenu() {
   const root = el('div', 'screen');
   root.innerHTML = `
     <div class="panel menu">
-      <h1>Cloudborne <span class="tag">table prototype</span></h1>
-      <p class="lead">A sandbox for trying card-game rules. 2–4 players, a shared draw pile and a shared table. The current rules are temporary placeholders.</p>
+      <h1>Cloudborne <span class="tag">playable demo</span></h1>
+      <p class="lead">A political card game for 2–4 families. Build influence with Aristocracy, Religion and the people; recruit Characters, plot hidden Schemes, expose your rivals and marry into power. Highest standing after 8 rounds wins. Rules are provisional demo rules.</p>
       <div class="choices">
         <button class="choice" data-mode="hotseat" type="button">
           <strong>Hotseat</strong>

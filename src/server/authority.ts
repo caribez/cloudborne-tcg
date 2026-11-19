@@ -6,7 +6,7 @@
  * Socket.IO layer (socketServer.ts) authenticates each socket to a session
  * token and forwards calls.
  */
-import { randomBytes, randomInt } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { applyAction, cleanPlayerName, setupGame } from '../shared/engine';
 import {
   MAX_SEATS,
@@ -18,8 +18,8 @@ import {
   type ServerSnapshot,
   type SimpleAck,
 } from '../shared/protocol';
-import { seededRng, type Rng } from '../shared/random';
-import { PROVISIONAL_RULES } from '../shared/rules';
+import { cryptoRng, type Rng } from '../shared/random';
+import { DEMO_RULES } from '../shared/rules';
 import type { GameState } from '../shared/types';
 import { playerView } from '../shared/views';
 
@@ -35,8 +35,13 @@ interface Session {
 }
 
 export interface AuthorityOptions {
-  /** Produces the shuffle RNG for each new game. Defaults to a crypto-seeded PRNG. The seed is never exposed. */
+  /** Produces the setup RNG for each new game (ids, shuffles, income). Defaults to crypto randomness; nothing about it is ever sent. */
   readonly rngFactory?: () => Rng;
+  /**
+   * Server-side test hook: adjusts each freshly set-up game (e.g. to give a seat
+   * specific cards). Not reachable from clients; production never sets it.
+   */
+  readonly prepareGame?: (state: GameState) => GameState;
   /** How long a disconnected player keeps a lobby seat (not during a game). */
   readonly lobbyGraceMs?: number;
   /** Called after any change that may alter someone's snapshot. */
@@ -48,7 +53,7 @@ export interface AuthorityOptions {
 
 const RECENT_LIMIT = 200;
 const secureToken = () => randomBytes(24).toString('base64url');
-const defaultRng = () => seededRng(randomInt(0, 2 ** 32));
+const defaultRng = () => cryptoRng();
 
 export class LanAuthority {
   private readonly sessions = new Map<string, Session>();
@@ -57,6 +62,7 @@ export class LanAuthority {
   private game: GameState | null = null;
   private lastRevision = -1;
   private readonly rngFactory: () => Rng;
+  private readonly prepareGame: (state: GameState) => GameState;
   private readonly lobbyGraceMs: number;
   private readonly onChange: () => void;
   private readonly log: (m: string) => void;
@@ -64,6 +70,7 @@ export class LanAuthority {
 
   constructor(options: AuthorityOptions = {}) {
     this.rngFactory = options.rngFactory ?? defaultRng;
+    this.prepareGame = options.prepareGame ?? ((s) => s);
     this.lobbyGraceMs = options.lobbyGraceMs ?? 60_000;
     this.onChange = options.onChange ?? (() => {});
     this.log = options.log ?? (() => {});
@@ -191,8 +198,8 @@ export class LanAuthority {
     if (token !== this.hostToken) return { ok: false, message: 'Only the host can start the game.' };
     if (this.game) return { ok: false, message: 'The game has already started.' };
     const seated = this.seats.filter((t): t is string => t !== null).map((t) => this.sessions.get(t)!);
-    if (seated.length < PROVISIONAL_RULES.minPlayers) {
-      return { ok: false, message: `At least ${PROVISIONAL_RULES.minPlayers} players are needed to start.` };
+    if (seated.length < DEMO_RULES.minPlayers) {
+      return { ok: false, message: `At least ${DEMO_RULES.minPlayers} players are needed to start.` };
     }
     const away = seated.filter((s) => !s.connected);
     if (away.length) return { ok: false, message: `Waiting for ${away.map((s) => s.name).join(', ')} to reconnect.` };
@@ -224,7 +231,7 @@ export class LanAuthority {
 
   private newGame(seated: Session[]): void {
     const initialRevision = Math.max(this.lastRevision, this.game?.revision ?? -1) + 1;
-    this.game = setupGame({ playerNames: seated.map((s) => s.name), rng: this.rngFactory(), initialRevision });
+    this.game = this.prepareGame(setupGame({ playerNames: seated.map((s) => s.name), rng: this.rngFactory(), initialRevision }));
     this.lastRevision = this.game.revision;
     this.log(`Game started with ${seated.length} players`);
     this.changed();
@@ -285,7 +292,7 @@ export class LanAuthority {
       return { playerId: s.playerId, name: s.name, connected: s.connected, isHost: t === this.hostToken };
     });
     return {
-      lobby: { phase: this.phase, seats, minPlayers: PROVISIONAL_RULES.minPlayers, shareUrls: this.shareUrls },
+      lobby: { phase: this.phase, seats, minPlayers: DEMO_RULES.minPlayers, shareUrls: this.shareUrls },
       game: this.game ? playerView(this.game, me.seat) : null,
       you: { playerId: me.playerId, seat: me.seat, isHost: token === this.hostToken },
       waitingFor: this.waitingFor(),

@@ -2,6 +2,9 @@
 
 Saved from the initial request so later work can refer to it. Current rules live
 in `PROTOTYPE_RULES.md`; approved rule changes supersede the temporary rules below.
+The placeholder rules and free table placement described here have since been
+replaced by the Cloudborne demo rules (see `PROTOTYPE_RULES.md` and
+`docs/political-game-design.md`); the architecture, hotseat and LAN requirements still apply.
 
 ## Goal
 
