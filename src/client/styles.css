@@ -296,12 +296,6 @@ code { font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; 
 .game,
 .screen {
   background:
-    linear-gradient(
-      180deg,
-      rgba(35, 46, 57, 0.18),
-      rgba(35, 46, 57, 0.45) 60%,
-      rgba(20, 29, 38, 0.92)
-    ),
     url('./assets/backgrounds/cloudscape.png')
     center center / cover no-repeat;
 }
