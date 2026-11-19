@@ -183,7 +183,6 @@ export class GameScreen {
   }
 
   showView(view: PlayerView, opts: { animate: boolean; decor?: readonly SeatDecor[]; youLabel?: string }): void {
-    const prev = this.view;
     this.view = view;
     this.decor = opts.decor ?? this.decor;
     if (opts.youLabel) this.youLabel = opts.youLabel;
@@ -196,7 +195,7 @@ export class GameScreen {
     if (!view.result) this.resultsHidden = false;
     this.scene.setView(view, { animate: opts.animate, anchor: this.anchor });
     this.scene.setSelected(this.selected);
-    this.announceNew(prev);
+    this.announceNew();
     this.render();
   }
 
@@ -427,14 +426,13 @@ export class GameScreen {
   };
 
   /** Briefly shows important public events that are new to this (private) viewer. */
-  private announceNew(prev: PlayerView | null): void {
+  private announceNew(): void {
     const v = this.view!;
     if (v.viewer === null) return; // public (privacy) views do not consume events
     const fresh = v.log.filter((e) => e.seq > this.lastSeenSeq && NOTABLE.has(e.kind));
     const first = this.lastSeenSeq < 0;
     this.lastSeenSeq = v.log.at(-1)?.seq ?? this.lastSeenSeq;
     if (first || !fresh.length) return;
-    void prev;
     this.flash(
       fresh
         .slice(-3)

@@ -20,6 +20,8 @@ export async function loadPlaywright() {
 }
 
 export const BASE = (process.argv[2] ?? process.env.BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '');
+/** The seed whose opening the scripts rely on (see the scripts' headers). */
+export const SEED = 137;
 
 let failures = 0;
 export function check(cond, message) {
@@ -37,24 +39,42 @@ export function done() {
 export const launchArgs = { args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] };
 
 export const screenInfo = (page) => page.evaluate(() => window.__cloudborne?.screen() ?? null);
-export const tablePoint = (page, x, y) => page.evaluate(([x, y]) => window.__cloudborne.tablePoint(x, y), [x, y]);
+export const viewInfo = (page) => page.evaluate(() => window.__cloudborne?.view() ?? null);
+export const waitFor = (page, fn, arg, timeout = 5000) => page.waitForFunction(fn, arg, { timeout }).then(() => true, () => false);
 
-export async function clickHandCard(page, index) {
+/** Clicks the first hand card with this definition; returns its instance id (or null). */
+export async function clickHandCard(page, defId) {
   const info = await screenInfo(page);
-  const c = info.hand[index];
+  const c = info.hand.find((h) => h.defId === defId);
+  if (!c) return null;
   // Aim low on the card so overlapping neighbours don't catch the click.
-  await page.mouse.click(c.x, c.y + 20);
+  await page.mouse.click(c.x, c.y + 30);
   return c.id;
 }
 
-export async function playAt(page, handIndex, x, y) {
-  const id = await clickHandCard(page, handIndex);
-  const p = await tablePoint(page, x, y);
-  await page.mouse.move(p.x, p.y);
-  await page.mouse.click(p.x, p.y);
+/** Clicks a table card by instance id (logical layout position). */
+export async function clickTableCard(page, id) {
+  const info = await screenInfo(page);
+  const c = info.table.find((t) => t.id === id);
+  if (!c) return false;
+  await page.mouse.move(c.x, c.y);
+  await page.mouse.click(c.x, c.y);
+  return true;
+}
+
+/** Selects a hand card, optionally picks a target button by visible text, and confirms. */
+export async function playCard(page, defId, targetText) {
+  const id = await clickHandCard(page, defId);
+  if (!id) return null;
+  await page.waitForSelector('.selection [data-confirm]');
+  if (targetText) await page.click(`.selection .target:has-text("${targetText}")`);
+  await page.click('.selection [data-confirm]');
   return id;
 }
 
 export async function toastText(page) {
   return (await page.isVisible('.toast')) ? await page.textContent('.toast') : '';
 }
+
+export const logText = (page) => page.textContent('.log ol');
+export const plateText = (page, name) => page.evaluate((n) => [...document.querySelectorAll('.plate')].find((p) => p.querySelector('.pl-name')?.textContent === n)?.textContent ?? '', name);

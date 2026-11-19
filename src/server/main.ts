@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import { networkInterfaces } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { seededRng } from '../shared/random';
 import { attachLanServer } from './socketServer';
 import { createStaticHandler } from './staticFiles';
 
@@ -35,9 +36,16 @@ function lanAddresses(): string[] {
 
 // In development, players open the Vite dev server (5173), which proxies Socket.IO here.
 const publicPort = isDev ? Number(process.env.VITE_PORT ?? 5173) : port;
+// Test-only: a fixed seed makes every game predictable (used by scripts/e2e-lan.mjs).
+// Set by the host operator only; clients can never influence randomness.
+const testSeed = Number(process.env.CLOUDBORNE_TEST_SEED);
+if (Number.isInteger(testSeed) && testSeed > 0) {
+  console.warn(`WARNING: CLOUDBORNE_TEST_SEED=${testSeed} is set. Every game is predictable. Use for automated tests only.`);
+}
 attachLanServer(httpServer, {
   log: (m) => console.log(`[lobby] ${m}`),
   shareUrls: lanAddresses().map((ip) => `http://${ip}:${publicPort}/`),
+  ...(Number.isInteger(testSeed) && testSeed > 0 ? { rngFactory: () => seededRng(testSeed) } : {}),
 });
 
 httpServer.on('error', (err: NodeJS.ErrnoException) => {

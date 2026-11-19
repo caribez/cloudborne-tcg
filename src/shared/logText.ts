@@ -34,8 +34,10 @@ export function describeLogEntry(entry: LogEntry, players: readonly { readonly n
       if (entry.missed) parts.push(`${entry.missed} not drawn: the deck is empty`);
       return `${name(entry.seat)}: ${parts.join(', ')}.`;
     }
-    case 'recruit':
-      return `${name(entry.seat)} recruited ${card(entry.defId)} for ${entry.cost} Gold (${describeChanges(entry.changes, name)}).`;
+    case 'recruit': {
+      const gains = entry.changes.length ? ` (${describeChanges(entry.changes, name)})` : '';
+      return `${name(entry.seat)} recruited ${card(entry.defId)} for ${entry.cost} Gold${gains}.`;
+    }
     case 'schemePlaced':
       return `${name(entry.seat)} placed a hidden Scheme (paid ${entry.cost} Gold).`;
     case 'challenge':

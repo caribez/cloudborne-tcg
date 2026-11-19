@@ -11,6 +11,7 @@
  * screen asks for the next player. It does not protect against someone
  * inspecting browser memory.
  */
+import { seededRng } from '../../shared/random';
 import { DEMO_RULES } from '../../shared/rules';
 import type { GameAction, Seat } from '../../shared/types';
 import { HotseatSession } from '../session/hotseatSession';
@@ -94,8 +95,20 @@ function hotseatSetup(host: HTMLElement, onBack: () => void, onStart: (names: st
 
 type HandoffReason = 'start' | 'turn' | 'reaction' | 'return' | 'hidden';
 
+/**
+ * Browser smoke checks may fix the hotseat shuffle with `?e2e&seed=N` so a
+ * scripted opening is reproducible. Hotseat state lives in this browser anyway;
+ * the LAN server never takes randomness from clients.
+ */
+function e2eSeed(): number | null {
+  const params = new URLSearchParams(location.search);
+  const seed = Number(params.get('seed'));
+  return params.has('e2e') && Number.isInteger(seed) && seed > 0 ? seed : null;
+}
+
 function hotseatGame(host: HTMLElement, names: string[], onNewGame: () => void, onExit: () => void): () => void {
-  const session = new HotseatSession(names);
+  const seed = e2eSeed();
+  const session = new HotseatSession(names, seed === null ? {} : { rngFactory: () => seededRng(seed) });
   /** The seat whose hand is currently revealed, or null behind the privacy screen / at game end. */
   let revealed: Seat | null = null;
 

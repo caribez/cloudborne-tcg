@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import { CARD_SIZE, computeLayout, ZONES, type LaidCard, type TableLayout } from '../../shared/layout';
 import type { Seat } from '../../shared/types';
-import type { PlayerView } from '../../shared/views';
+import { HIDDEN, type PlayerView } from '../../shared/views';
 import { cardBackCanvas, cardFrontCanvas } from './cardArt';
 
 export interface SceneCallbacks {
@@ -368,7 +368,7 @@ export class TableScene {
 
   /** Face material for a known definition; concealed cards always share the back. */
   private faceMaterial(defId: string, secret: boolean): THREE.MeshStandardMaterial {
-    if (defId === 'hidden') return this.backMaterial;
+    if (defId === HIDDEN) return this.backMaterial;
     const key = `${defId}|${secret}`;
     let m = this.frontMaterials.get(key);
     if (!m) {
